@@ -22,6 +22,23 @@ uses
   Windows, SysUtils;
 
 const
+  // Loading strategy flags.
+  // Loading strategy affects what file informations will be loaded and
+  // decoded/parsed.
+  WFI_LS_LoadSize            = $00000001;
+  WFI_LS_LoadTime            = $00000002;
+  WFI_LS_LoadAttributes      = $00000004;
+  WFI_LS_DecodeAttributes    = $00000008;
+  WFI_LS_LoadVersionInfo     = $00000010;
+  WFI_LS_ParseVersionInfo    = $00000020;
+  WFI_LS_LoadFixedFileInfo   = $00000040;
+  WFI_LS_DecodeFixedFileInfo = $00000080;
+
+  WFI_LS_LoadNone            = $00000000;
+  WFI_LS_BasicInfo           = $0000000F;
+  WFI_LS_All                 = $FFFFFFFF;
+
+  // File attributes flags
   INVALID_FILE_ATTRIBUTES = DWORD(-1); 
 
   FILE_ATTRIBUTE_ARCHIVE             = $20;
@@ -104,6 +121,13 @@ type
   PtrUInt = LongWord;
 {$ENDIF}
 
+{==============================================================================}
+{   Auxiliary structures                                                       }
+{--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --}
+{ Following structures are used to store informations about requested file in  }
+{ a more user-friendly and better accessible way.                              }
+{==============================================================================}
+
   TFileAttributesDecoded = record
     Archive:            Boolean;
     Compressed:         Boolean;
@@ -123,6 +147,10 @@ type
     Temporary:          Boolean;
     Virtual:            Boolean;
   end;
+
+//------------------------------------------------------------------------------
+// Group of structures used to store decoded informations from fixed file info
+// part of version information resource.
 
   TFixedFileInfo_VersionMembers = record
     Major:    Word;
@@ -154,6 +182,10 @@ type
     FileDateFull:           Int64;
   end;
 
+//------------------------------------------------------------------------------
+// Following structures are used to store fully parsed informations from
+// version information structure.
+
   TTranslationItem = record
     LanguageName: String;
     LanguageStr:  String;
@@ -172,6 +204,10 @@ type
     Translation:  TTranslationItem;
     Strings:      Array of TStringTableItem;
   end;
+
+//------------------------------------------------------------------------------
+// Following structures are used to hold partially parsed informations from
+// version information structure.
 
   TVersionInfoStruct_String = record
     Address:    Pointer;
@@ -220,6 +256,11 @@ type
     VarFileInfos:       Array of TVersionInfoStruct_VarFileInfo;
   end;
 
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                        TWinFileInfo class declaration                        }
+{------------------------------------------------------------------------------}
+{==============================================================================}
   TWinFileInfo = class(TObject)
   private
     fExists:                  Boolean;
@@ -241,6 +282,7 @@ type
     fVersionInfoStringTables: Array of TStringTable;
     fVersionInfoParsed:       Boolean;
     fVersionInfoStruct:       TVersionInfoStruct;
+    fLoadingStrategy:         LongWord;
     fFormatSettings:          TFormatSettings;
     fFileHandle:              THandle;
     fVerInfoSize:             PtrUInt;
@@ -254,6 +296,7 @@ type
     Function GetVersionInfoStrings(Table,Index: Integer): TStringTableItem;
     Function GetVersionInfoValues(Language,Key: String): String;
   protected
+    Function LoadingStrategyFlag(Flag: LongWord): Boolean; virtual;
     procedure VersionInfo_LoadStrings; virtual;
     procedure VersionInfo_EnumerateKeys; virtual;
     procedure VersionInfo_Parse; virtual;
@@ -267,8 +310,8 @@ type
     procedure Initialize(const FileName: String); virtual;
     procedure Finalize; virtual;
   public
-    constructor Create; overload;
-    constructor Create(const FileName: String); overload;
+    constructor Create(LoadingStrategy: LongWord = WFI_LS_All); overload;
+    constructor Create(const FileName: String; LoadingStrategy: LongWord = WFI_LS_All); overload;
     destructor Destroy; override;
     procedure Refresh; virtual;
     Function IndexOfVersionInfoStringTable(Translation: LongWord): Integer; virtual;
@@ -301,7 +344,8 @@ type
     property VersionInfoStrings[Table,Index: Integer]: TStringTableItem read GetVersionInfoStrings;
     property VersionInfoValues[Language,Key: String]: String read GetVersionInfoValues; default;
     property VersionInfoParsed: Boolean read fVersionInfoParsed;
-    property VersionInfoStruct: TVersionInfoStruct read fVersionInfoStruct;   
+    property VersionInfoStruct: TVersionInfoStruct read fVersionInfoStruct;
+    property LoadingStrategy: LongWord read fLoadingStrategy write fLoadingStrategy;    
     property FormatSettings: TFormatSettings read fFormatSettings write fFormatSettings;
     property FileHandle: THandle read fFileHandle;
     property VerInfoSize: PtrUInt read fVerInfoSize;
@@ -329,6 +373,8 @@ type
     Text: String;
   end;
 
+// Tables used to convert some binary informations (mainly flags) to a textual
+// representation.
 const
   AttributesStrings: array[0..16] of TAttributeString = (
     (Flag: FILE_ATTRIBUTE_ARCHIVE;             Text: 'Archive';             Str: 'A'),
@@ -394,7 +440,15 @@ const
     (Flag: VFT2_FONT_VECTOR;   Text: 'Vector font'),
     (Flag: VFT2_UNKNOWN;       Text: 'Unknown'));
 
-//------------------------------------------------------------------------------
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                       TWinFileInfo class implementation                      }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{------------------------------------------------------------------------------}
+{   TWinFileInfo - private methods                                             }
+{------------------------------------------------------------------------------}
 
 Function TWinFileInfo.GetVersionInfoTranslations(Index: Integer): TTranslationItem;
 begin
@@ -471,7 +525,16 @@ If fVersionInfoPresent then
     Result := PChar(StrPtr);
 end;
 
-//==============================================================================
+{------------------------------------------------------------------------------}
+{   TWinFileInfo - protected methods                                           }
+{------------------------------------------------------------------------------}
+
+Function TWinFileInfo.LoadingStrategyFlag(Flag: LongWord): Boolean;
+begin
+Result := (fLoadingStrategy and Flag) <> 0;
+end;
+
+//------------------------------------------------------------------------------
 
 procedure TWinFileInfo.VersionInfo_LoadStrings;
 var
@@ -573,10 +636,6 @@ var
   end;
 
 begin
-SetLength(fVersionInfoStruct.StringFileInfos,0);
-SetLength(fVersionInfoStruct.VarFileInfos,0);
-fVersionInfoStruct.Key := '';
-FillChar(fVersionInfoStruct,SizeOf(fVersionInfoStruct),0);
 If (fVerInfoSize >= 6) and (fVerInfoSize >= PWord(fVerInfoData)^) then
   try
     CurrentAddress := fVerInfoData;
@@ -651,7 +710,6 @@ var
   TrsSize:  LongWord;
   i:        LongWord;
 begin
-SetLength(fVersionInfoStringTables,0);
 If VerQueryValue(fVerInfoData,'\VarFileInfo\Translation',{%H-}TrsPtr,{%H-}TrsSize) then
   begin
     SetLength(fVersionInfoStringTables,TrsSize div SizeOf(LongWord));
@@ -697,20 +755,13 @@ var
   end;
 
 begin
-FillChar(fVersionInfoFFI,SizeOf(fVersionInfoFFI),0);
-fVersionInfoFFIDecoded.FileVersionStr := '';
-fVersionInfoFFIDecoded.ProductVersionStr := '';
-fVersionInfoFFIDecoded.FileOSStr := '';
-fVersionInfoFFIDecoded.FileTypeStr := '';
-fVersionInfoFFIDecoded.FileSubTypeStr := '';
-FillChar(fVersionInfoFFIDecoded,SizeOf(fVersionInfoFFIDecoded),0);
 fVersionInfoFFIPresent := VerQueryValue(fVerInfoData,'\',{%H-}FFIPtr,{%H-}FFISize);
 If fVersionInfoFFIPresent then
   begin
     If FFISize = SizeOf(TVSFixedFileInfo) then
       begin
         fVersionInfoFFI := PVSFixedFileInfo(FFIPtr)^;
-        If fVersionInfoFFI.dwSignature = $FEEF04BD then
+        If LoadingStrategyFlag(WFI_LS_DecodeFixedFileInfo) then
           begin
             fVersionInfoFFIDecoded.FileVersionFull := (Int64(fVersionInfoFFI.dwFileVersionMS) shl 32) or fVersionInfoFFI.dwFileVersionLS;
             fVersionInfoFFIDecoded.FileVersionMembers.Major := fVersionInfoFFI.dwFileVersionMS shr 16;
@@ -741,8 +792,7 @@ If fVersionInfoFFIPresent then
               fVersionInfoFFIDecoded.FileSubTypeStr := '';
             end;
             fVersionInfoFFIDecoded.FileDateFull := (Int64(fVersionInfoFFI.dwFileDateMS) shl 32) or fVersionInfoFFI.dwFileDateLS;
-          end
-        else raise Exception.CreateFmt('TWinFileInfo.VersionInfo_LoadFixedFileInfo: Fixed file information does not have valid signature (got 0x%x, expected 0x%x).',[Integer(fVersionInfoFFI.dwSignature),Integer($FEEF04BD)]);
+          end;
       end
     else raise Exception.CreateFmt('TWinFileInfo.VersionInfo_LoadFixedFileInfo: Wrong size of fixed file information (got %d, expected %d).',[FFISize,SizeOf(TVSFixedFileInfo)]);
   end;
@@ -761,11 +811,14 @@ If fVersionInfoPresent then
     fVerInfoData := AllocMem(fVerInfoSize);
     If GetFileVersionInfo(PChar(fLongName),0,fVerInfoSize,fVerInfoData) then
       begin
-        VersionInfo_LoadFixedFileInfo;
-        VersionInfo_LoadTranslations;
-        VersionInfo_Parse;
-        VersionInfo_EnumerateKeys;
-        VersionInfo_LoadStrings;
+        If LoadingStrategyFlag(WFI_LS_LoadFixedFileInfo) then VersionInfo_LoadFixedFileInfo;
+        VersionInfo_LoadTranslations;        
+        If LoadingStrategyFlag(WFI_LS_ParseVersionInfo) then
+          begin
+            VersionInfo_Parse;
+            VersionInfo_EnumerateKeys;
+          end;
+        VersionInfo_LoadStrings;          
       end
     else
       begin
@@ -777,7 +830,6 @@ If fVersionInfoPresent then
 end;
 
 //------------------------------------------------------------------------------
-
 
 procedure TWinFileInfo.LoadAttributes;
 
@@ -798,25 +850,26 @@ procedure TWinFileInfo.LoadAttributes;
   end;
 
 begin
-fAttributesStr := '';
-fAttributesText := '';
-fAttributesDecoded.Archive := CheckAttribute(FILE_ATTRIBUTE_ARCHIVE);
-fAttributesDecoded.Compressed := CheckAttribute(FILE_ATTRIBUTE_COMPRESSED);
-fAttributesDecoded.Device := CheckAttribute(FILE_ATTRIBUTE_DEVICE);
-fAttributesDecoded.Directory := CheckAttribute(FILE_ATTRIBUTE_DIRECTORY);
-fAttributesDecoded.Encrypted := CheckAttribute(FILE_ATTRIBUTE_ENCRYPTED);
-fAttributesDecoded.Hidden := CheckAttribute(FILE_ATTRIBUTE_HIDDEN);
-fAttributesDecoded.IntegrityStream := CheckAttribute(FILE_ATTRIBUTE_INTEGRITY_STREAM);
-fAttributesDecoded.Normal := CheckAttribute(FILE_ATTRIBUTE_NORMAL);
-fAttributesDecoded.NotContentIndexed := CheckAttribute(FILE_ATTRIBUTE_NOT_CONTENT_INDEXED);
-fAttributesDecoded.NoScrubData := CheckAttribute(FILE_ATTRIBUTE_NO_SCRUB_DATA);
-fAttributesDecoded.Offline := CheckAttribute(FILE_ATTRIBUTE_OFFLINE);
-fAttributesDecoded.ReadOnly := CheckAttribute(FILE_ATTRIBUTE_READONLY);
-fAttributesDecoded.ReparsePoint := CheckAttribute(FILE_ATTRIBUTE_REPARSE_POINT);
-fAttributesDecoded.SparseFile := CheckAttribute(FILE_ATTRIBUTE_SPARSE_FILE);
-fAttributesDecoded.System := CheckAttribute(FILE_ATTRIBUTE_SYSTEM);
-fAttributesDecoded.Temporary := CheckAttribute(FILE_ATTRIBUTE_TEMPORARY);
-fAttributesDecoded.Virtual := CheckAttribute(FILE_ATTRIBUTE_VIRTUAL);
+If LoadingStrategyFlag(WFI_LS_DecodeAttributes) then
+  begin
+    fAttributesDecoded.Archive := CheckAttribute(FILE_ATTRIBUTE_ARCHIVE);
+    fAttributesDecoded.Compressed := CheckAttribute(FILE_ATTRIBUTE_COMPRESSED);
+    fAttributesDecoded.Device := CheckAttribute(FILE_ATTRIBUTE_DEVICE);
+    fAttributesDecoded.Directory := CheckAttribute(FILE_ATTRIBUTE_DIRECTORY);
+    fAttributesDecoded.Encrypted := CheckAttribute(FILE_ATTRIBUTE_ENCRYPTED);
+    fAttributesDecoded.Hidden := CheckAttribute(FILE_ATTRIBUTE_HIDDEN);
+    fAttributesDecoded.IntegrityStream := CheckAttribute(FILE_ATTRIBUTE_INTEGRITY_STREAM);
+    fAttributesDecoded.Normal := CheckAttribute(FILE_ATTRIBUTE_NORMAL);
+    fAttributesDecoded.NotContentIndexed := CheckAttribute(FILE_ATTRIBUTE_NOT_CONTENT_INDEXED);
+    fAttributesDecoded.NoScrubData := CheckAttribute(FILE_ATTRIBUTE_NO_SCRUB_DATA);
+    fAttributesDecoded.Offline := CheckAttribute(FILE_ATTRIBUTE_OFFLINE);
+    fAttributesDecoded.ReadOnly := CheckAttribute(FILE_ATTRIBUTE_READONLY);
+    fAttributesDecoded.ReparsePoint := CheckAttribute(FILE_ATTRIBUTE_REPARSE_POINT);
+    fAttributesDecoded.SparseFile := CheckAttribute(FILE_ATTRIBUTE_SPARSE_FILE);
+    fAttributesDecoded.System := CheckAttribute(FILE_ATTRIBUTE_SYSTEM);
+    fAttributesDecoded.Temporary := CheckAttribute(FILE_ATTRIBUTE_TEMPORARY);
+    fAttributesDecoded.Virtual := CheckAttribute(FILE_ATTRIBUTE_VIRTUAL);
+  end;
 end;
 
 //------------------------------------------------------------------------------
@@ -895,6 +948,32 @@ end;
 
 procedure TWinFileInfo.Initialize(const FileName: String);
 begin
+// Clear everything that might not be loaded depending on loading strategy
+fSize := 0;
+fSizeStr := '';
+fCreationTime := 0;
+fLastAccessTime := 0;
+fLastWriteTime := 0;
+fAttributesFlags := 0;
+fAttributesStr := '';
+fAttributesText := '';
+FillChar(fAttributesDecoded,SizeOf(fAttributesDecoded),0);
+fVersionInfoPresent := False;
+fVersionInfoFFIPresent := False;
+FillChar(fVersionInfoFFI,SizeOf(fVersionInfoFFI),0);
+fVersionInfoFFIDecoded.FileVersionStr := '';
+fVersionInfoFFIDecoded.ProductVersionStr := '';
+fVersionInfoFFIDecoded.FileOSStr := '';
+fVersionInfoFFIDecoded.FileTypeStr := '';
+fVersionInfoFFIDecoded.FileSubTypeStr := '';
+FillChar(fVersionInfoFFIDecoded,SizeOf(fVersionInfoFFIDecoded),0);
+SetLength(fVersionInfoStringTables,0);
+fVersionInfoParsed := False;
+SetLength(fVersionInfoStruct.StringFileInfos,0);
+SetLength(fVersionInfoStruct.VarFileInfos,0);
+fVersionInfoStruct.Key := '';
+FillChar(fVersionInfoStruct,SizeOf(fVersionInfoStruct),0);
+// Start loading
 fLongName := ExpandFileName(FileName);
 SetLength(fShortName,MAX_PATH);
 SetLength(fShortName,GetShortPathName(PChar(fLongName),PChar(fShortName),Length(fShortName)));
@@ -903,15 +982,14 @@ If CheckFileExists then
     fFileHandle := CreateFile(PChar(fLongName),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
     If fFileHandle <> INVALID_HANDLE_VALUE then
       begin
-        LoadSize;
-        LoadTime;
-        LoadAttributes;
-        LoadVersionInfo;
+        If LoadingStrategyFlag(WFI_LS_LoadSize) then LoadSize;
+        If LoadingStrategyFlag(WFI_LS_LoadTime) then LoadTime;
+        If LoadingStrategyFlag(WFI_LS_LoadAttributes) then LoadAttributes;
+        If LoadingStrategyFlag(WFI_LS_LoadVersionInfo) then LoadVersionInfo;
       end
     else raise Exception.CreateFmt('TWinFileInfo.Initialize: Failed to open requested file ("%s",0x%x).',[fLongName,GetLastError]);
   end;
 end;
-
 
 //------------------------------------------------------------------------------
 
@@ -925,22 +1003,25 @@ CloseHandle(fFileHandle);
 fFileHandle := INVALID_HANDLE_VALUE;
 end;
 
-//------------------------------------------------------------------------------
+{------------------------------------------------------------------------------}
+{   TWinFileInfo - public methods                                              }
+{------------------------------------------------------------------------------}
 
-constructor TWinFileInfo.Create;
+constructor TWinFileInfo.Create(LoadingStrategy: LongWord = WFI_LS_All);
 var
   ModuleFileName: String;
 begin
 SetLength(ModuleFileName,MAX_PATH);
 SetLength(ModuleFIleName,GetModuleFileName(hInstance,PChar(ModuleFileName),Length(ModuleFileName)));
-Create(ModuleFileName);
+Create(ModuleFileName,LoadingStrategy);
 end;
 
 //--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
-constructor TWinFileInfo.Create(const FileName: String);
+constructor TWinFileInfo.Create(const FileName: String; LoadingStrategy: LongWord = WFI_LS_All);
 begin
 inherited Create;
+fLoadingStrategy := LoadingStrategy;
 {%H-}GetLocaleFormatSettings(LOCALE_USER_DEFAULT,fFormatSettings);
 Initialize(FileName);
 end;
@@ -1096,7 +1177,7 @@ with TStringList.Create do
                   For j := 0 to Pred(VersionInfoKeysCount[i]) do
                     If Length(VersionInfoKeys[i,j]) > Len then Len := Length(VersionInfoKeys[i,j]);
                   For j := 0 to Pred(VersionInfoStringsCount[i]) do
-                  Add(Format('    %s: %s%s',[VersionInfoStrings[i,j].Key,StringOfChar(' ',Len - Length(VersionInfoStrings[i,j].Key)),VersionInfoStrings[i,j].Value]));
+                    Add(Format('    %s: %s%s',[VersionInfoStrings[i,j].Key,StringOfChar(' ',Len - Length(VersionInfoStrings[i,j].Key)),VersionInfoStrings[i,j].Value]));
                 end;
             end
           else Add(sLineBreak + 'No string table found.');
