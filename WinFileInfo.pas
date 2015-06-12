@@ -610,6 +610,8 @@ var
   CurrentAddress: Pointer;
   TempBlock:      TVIS_Base;
 
+//--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+
   Function Align32bit(Ptr: Pointer): Pointer;
   begin
     If (({%H-}PtrUInt(Ptr) and $3) <> 0) then
@@ -617,6 +619,8 @@ var
     else
       Result := Ptr;
   end;
+
+//--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
   procedure ParseBlock(var Ptr: Pointer; BlockBase: Pointer);
   begin
@@ -629,11 +633,15 @@ var
     Ptr := Align32bit({%H-}Pointer({%H-}PtrUInt(PVIS_Base(BlockBase)^.Address) + 6 + PtrUInt((Length(PVIS_Base(BlockBase)^.Key) + 1) * 2)));
   end;
 
+//--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+
   Function CheckPointer(var Ptr: Pointer; BlockBase: Pointer): Boolean;
   begin
     Result := ({%H-}PtrUInt(Ptr) >= {%H-}PtrUInt(PVIS_Base(BlockBase)^.Address)) and
               ({%H-}PtrUInt(Ptr) < ({%H-}PtrUInt(PVIS_Base(BlockBase)^.Address) + PVIS_Base(BlockBase)^.Size));
   end;
+
+//--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
 begin
 If (fVerInfoSize >= 6) and (fVerInfoSize >= PWord(fVerInfoData)^) then
@@ -735,11 +743,15 @@ var
   FFISize:          LongWord;
   FFIWorkFileFlags: LongWord;
 
+//--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+
   Function VersionToStr(Low, High: LongWord): String;
   begin
     Result := IntToStr(High shr 16) + '.' + IntToStr(High and $FFFF) +
               '.' + IntToStr(Low shr 16) + '.' + IntToStr(Low and $FFFF);
   end;
+
+//--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
   Function GetFlagText(Flag: LongWord; Data: array of TFlagText; NotFound: String): String;
   var
@@ -753,6 +765,8 @@ var
           Break;
         end;
   end;
+
+//--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
 begin
 fVersionInfoFFIPresent := VerQueryValue(fVerInfoData,'\',{%H-}FFIPtr,{%H-}FFISize);
@@ -984,7 +998,8 @@ If CheckFileExists then
       begin
         If LoadingStrategyFlag(WFI_LS_LoadSize) then LoadSize;
         If LoadingStrategyFlag(WFI_LS_LoadTime) then LoadTime;
-        If LoadingStrategyFlag(WFI_LS_LoadAttributes) then LoadAttributes;
+        If LoadingStrategyFlag(WFI_LS_LoadAttributes) then LoadAttributes
+          else fAttributesFlags := 0;
         If LoadingStrategyFlag(WFI_LS_LoadVersionInfo) then LoadVersionInfo;
       end
     else raise Exception.CreateFmt('TWinFileInfo.Initialize: Failed to open requested file ("%s",0x%x).',[fLongName,GetLastError]);
