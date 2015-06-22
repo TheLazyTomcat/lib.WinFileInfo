@@ -9,9 +9,9 @@
 
   WinFileInfo
 
-  ©František Milt 2015-06-11
+  ©František Milt 2015-06-22
 
-  Version 1.0
+  Version 1.0.1
 
 ===============================================================================}
 unit WinFileInfo;
@@ -440,6 +440,11 @@ const
     (Flag: VFT2_FONT_VECTOR;   Text: 'Vector font'),
     (Flag: VFT2_UNKNOWN;       Text: 'Unknown'));
 
+  VerInfo_DefaultKeys: array[0..11] of String = (
+    'Comments','CompanyName','FileDescription','FileVersion','InternalName',
+    'LegalCopyright','LegalTrademarks','OriginalFilename','ProductName',
+    'ProductVersion','PrivateBuild','SpecialBuild');
+
 {==============================================================================}
 {------------------------------------------------------------------------------}
 {                       TWinFileInfo class implementation                      }
@@ -579,19 +584,9 @@ For i := Low(fVersionInfoStruct.StringFileInfos) to High(fVersionInfoStruct.Stri
               end;
           If Length(fVersionInfoStringTables[Table].Strings) <= 0 then
             begin
-              SetLength(fVersionInfoStringTables[Table].Strings,12);
-              fVersionInfoStringTables[Table].Strings[0].Key := 'Comments';
-              fVersionInfoStringTables[Table].Strings[1].Key := 'CompanyName';
-              fVersionInfoStringTables[Table].Strings[2].Key := 'FileDescription';
-              fVersionInfoStringTables[Table].Strings[3].Key := 'FileVersion';
-              fVersionInfoStringTables[Table].Strings[4].Key := 'InternalName';
-              fVersionInfoStringTables[Table].Strings[5].Key := 'LegalCopyright';
-              fVersionInfoStringTables[Table].Strings[6].Key := 'LegalTrademarks';
-              fVersionInfoStringTables[Table].Strings[7].Key := 'OriginalFilename';
-              fVersionInfoStringTables[Table].Strings[8].Key := 'ProductName';
-              fVersionInfoStringTables[Table].Strings[9].Key := 'ProductVersion';
-              fVersionInfoStringTables[Table].Strings[10].Key := 'PrivateBuild';
-              fVersionInfoStringTables[Table].Strings[11].Key := 'SpecialBuild';
+              SetLength(fVersionInfoStringTables[Table].Strings,Length(VerInfo_DefaultKeys));
+              For j := Low(VerInfo_DefaultKeys) to High(VerInfo_DefaultKeys) do
+                fVersionInfoStringTables[Table].Strings[j].Key := VerInfo_DefaultKeys[j];
             end;
         end;
 end;
