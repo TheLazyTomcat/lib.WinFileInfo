@@ -23,7 +23,7 @@ uses
 
 const
   // Loading strategy flags.
-  // Loading strategy affects what file informations will be loaded and
+  // Loading strategy affects what file information will be loaded and
   // decoded/parsed.
   WFI_LS_LoadSize            = $00000001;
   WFI_LS_LoadTime            = $00000002;
@@ -124,7 +124,7 @@ type
 {==============================================================================}
 {   Auxiliary structures                                                       }
 {--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --}
-{ Following structures are used to store informations about requested file in  }
+{ Following structures are used to store information about requested file in   }
 { a more user-friendly and better accessible way.                              }
 {==============================================================================}
 
@@ -149,7 +149,7 @@ type
   end;
 
 //------------------------------------------------------------------------------
-// Group of structures used to store decoded informations from fixed file info
+// Group of structures used to store decoded information from fixed file info
 // part of version information resource.
 
   TFixedFileInfo_VersionMembers = record
@@ -183,7 +183,7 @@ type
   end;
 
 //------------------------------------------------------------------------------
-// Following structures are used to store fully parsed informations from
+// Following structures are used to store fully parsed information from
 // version information structure.
 
   TTranslationItem = record
@@ -206,7 +206,7 @@ type
   end;
 
 //------------------------------------------------------------------------------
-// Following structures are used to hold partially parsed informations from
+// Following structures are used to hold partially parsed information from
 // version information structure.
 
   TVersionInfoStruct_String = record
@@ -373,7 +373,7 @@ type
     Text: String;
   end;
 
-// Tables used to convert some binary informations (mainly flags) to a textual
+// Tables used to convert some binary information (mainly flags) to a textual
 // representation.
 const
   AttributesStrings: array[0..16] of TAttributeString = (
