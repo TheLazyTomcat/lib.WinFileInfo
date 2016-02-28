@@ -9,9 +9,9 @@
 
   WinFileInfo
 
-  ©František Milt 2015-11-16
+  ©František Milt 2016-02-28
 
-  Version 1.0.1
+  Version 1.0.2
 
 ===============================================================================}
 unit WinFileInfo;
@@ -361,7 +361,7 @@ Function SizeToStr(Size: UInt64): String;
 implementation
 
 uses
-  Classes;
+  Classes{$IFDEF FPC}, LazUTF8{$ENDIF};
 
 {$If not declared(GetFileSizeEx)}
 Function GetFileSizeEx(hFile: THandle; lpFileSize: PInt64): BOOL; stdcall; external 'kernel32.dll';
@@ -564,9 +564,13 @@ var
   StrSize:  UInt32;
 begin
 Result := '';
-If fVersionInfoPresent then
+If fVersionInfoPresent and (Language <> '') and (Key <> '') then
   If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Language,Key])),{%H-}StrPtr,{%H-}StrSize) then
+  {$If defined(FPC) and not defined(Unicode)}
+    Result := WinCPToUTF8(PChar(StrPtr));
+  {$ELSE}
     Result := PChar(StrPtr);
+  {$IFEND}
 end;
 
 {------------------------------------------------------------------------------}
@@ -593,7 +597,7 @@ For Table := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
         begin
           If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Translation.LanguageStr,Strings[i].Key])),{%H-}StrPtr,{%H-}StrSize) then
           {$If defined(FPC) and not defined(Unicode)}
-            Strings[i].Value := AnsiToUTF8(PChar(StrPtr))
+            Strings[i].Value := WinCPToUTF8(PChar(StrPtr))
           {$ELSE}
             Strings[i].Value := PChar(StrPtr)
           {$IFEND}
@@ -611,16 +615,16 @@ var
   i,j,k:  Integer;
 begin
 For i := Low(fVersionInfoStruct.StringFileInfos) to High(fVersionInfoStruct.StringFileInfos) do
-  If AnsiSameText(fVersionInfoStruct.StringFileInfos[i].Key,'StringFileInfo') then
+  If AnsiSameText(UTF8Encode(fVersionInfoStruct.StringFileInfos[i].Key),'StringFileInfo') then
     For Table := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
       with fVersionInfoStruct.StringFileInfos[i] do
         begin
           For j := Low(StringTables) to High(StringTables) do
-            If AnsiSameText(StringTables[j].Key,fVersionInfoStringTables[Table].Translation.LanguageStr) then
+            If AnsiSameText(UTF8Encode(StringTables[j].Key),fVersionInfoStringTables[Table].Translation.LanguageStr) then
               begin
                 SetLength(fVersionInfoStringTables[Table].Strings,Length(StringTables[j].Strings));
                 For k := Low(StringTables[j].Strings) to High(StringTables[j].Strings) do
-                   fVersionInfoStringTables[Table].Strings[k].Key := StringTables[j].Strings[k].Key;
+                   fVersionInfoStringTables[Table].Strings[k].Key := UTF8Encode(StringTables[j].Strings[k].Key);
               end;
           If Length(fVersionInfoStringTables[Table].Strings) <= 0 then
             begin
@@ -662,9 +666,6 @@ var
     PVIS_Base(BlockBase)^.Address := Ptr;
     PVIS_Base(BlockBase)^.Size := PUInt16(PVIS_Base(BlockBase)^.Address)^;
     PVIS_Base(BlockBase)^.Key := {%H-}PWideChar({%H-}PtrUInt(PVIS_Base(BlockBase)^.Address) + 6);
-  {$IF defined(FPC) and not defined(Unicode)}
-    PVIS_Base(BlockBase)^.Key := AnsiToUTF8(PVIS_Base(BlockBase)^.Key);
-  {$IFEND}
     Ptr := Align32bit({%H-}Pointer({%H-}PtrUInt(PVIS_Base(BlockBase)^.Address) + 6 + PtrUInt((Length(PVIS_Base(BlockBase)^.Key) + 1) * 2)));
   end;
 
@@ -689,7 +690,7 @@ If (fVerInfoSize >= 6) and (fVerInfoSize >= PUInt16(fVerInfoData)^) then
     while CheckPointer(CurrentAddress,@fVersionInfoStruct) do
       begin
         ParseBlock(CurrentAddress,@TempBlock);
-        If AnsiSameText(TempBlock.Key,'StringFileInfo') then
+        If AnsiSameText(UTF8Encode(TempBlock.Key),'StringFileInfo') then
           begin
             SetLength(fVersionInfoStruct.StringFileInfos,Length(fVersionInfoStruct.StringFileInfos) + 1);
             with fVersionInfoStruct.StringFileInfos[High(fVersionInfoStruct.StringFileInfos)] do
@@ -713,7 +714,7 @@ If (fVerInfoSize >= 6) and (fVerInfoSize >= PUInt16(fVerInfoData)^) then
                   end;
               end
           end
-        else If AnsiSameText(TempBlock.Key,'VarFileInfo') then
+        else If AnsiSameText(UTF8Encode(TempBlock.Key),'VarFileInfo') then
           begin
             SetLength(fVersionInfoStruct.VarFileInfos,Length(fVersionInfoStruct.VarFileInfos) + 1);
             with fVersionInfoStruct.VarFileInfos[High(fVersionInfoStruct.VarFileInfos)] do
@@ -762,7 +763,7 @@ If VerQueryValue(fVerInfoData,'\VarFileInfo\Translation',{%H-}TrsPtr,{%H-}TrsSiz
           SetLength(LanguageName,256);
           SetLength(LanguageName,VerLanguageName(Translation,PChar(LanguageName),Length(LanguageName)));
         {$If defined(FPC) and not defined(Unicode)}
-          LanguageName := AnsiToUTF8(LanguageName);
+          LanguageName := WinCPToUTF8(LanguageName);
         {$IFEND}
           LanguageStr := IntToHex(Language,4) + IntToHex(CodePage,4);
         end;
