@@ -9,9 +9,9 @@
 
   WinFileInfo
 
-  ©František Milt 2016-02-28
+  ©František Milt 2016-03-01
 
-  Version 1.0.2
+  Version 1.0.3
 
 ===============================================================================}
 unit WinFileInfo;
@@ -358,10 +358,20 @@ type
 
 Function SizeToStr(Size: UInt64): String;
 
+
+{$IF not Declared(FPC_FULLVERSION)}
+const
+(*
+  Delphi 7 requires this, otherwise they throw error on comparison in
+  {$IF FPC_FULLVERSION < ...} condition.
+*)
+  FPC_FULLVERSION = Integer(0);
+{$IFEND}
+
 implementation
 
 uses
-  Classes{$IFDEF FPC}, LazUTF8{$ENDIF};
+  Classes{$IFDEF FPC}, LazUTF8{$IF (FPC_FULLVERSION < 20701)}, LazFileUTils{$IFEND}{$ENDIF};
 
 {$If not declared(GetFileSizeEx)}
 Function GetFileSizeEx(hFile: THandle; lpFileSize: PInt64): BOOL; stdcall; external 'kernel32.dll';
@@ -852,7 +862,11 @@ procedure TWinFileInfo.LoadVersionInfo;
 var
   Dummy:  DWord;
 begin
+{$IF Defined(FPC) and not Defined(Unicode)}
+fVerInfoSize := GetFileVersionInfoSize(PChar(UTF8ToWinCP(fLongName)),{%H-}Dummy);
+{$ELSE}
 fVerInfoSize := GetFileVersionInfoSize(PChar(fLongName),{%H-}Dummy);
+{$IFEND}
 fVersionInfoPresent := fVerInfoSize > 0;
 If fVersionInfoPresent then
   begin
@@ -968,7 +982,11 @@ end;
 
 Function TWinFileInfo.CheckFileExists: Boolean;
 begin
+{$IF Defined(FPC) and not Defined(Unicode)}
+fAttributesFlags := GetFileAttributes(PChar(UTF8ToWinCP(fLongName)));
+{$ELSE}
 fAttributesFlags := GetFileAttributes(PChar(fLongName));
+{$IFEND}
 fExists := (fAttributesFlags <> INVALID_FILE_ATTRIBUTES) and
            (fAttributesFlags and FILE_ATTRIBUTE_DIRECTORY = 0);
 Result := fExists;
@@ -1004,12 +1022,25 @@ SetLength(fVersionInfoStruct.VarFileInfos,0);
 fVersionInfoStruct.Key := '';
 FillChar(fVersionInfoStruct,SizeOf(fVersionInfoStruct),0);
 // Start loading
+{$IF Defined(FPC) and not Defined(Unicode) and (FPC_FULLVERSION < 20701)}
+fLongName := ExpandFileNameUTF8(FileName);
+{$ELSE}
 fLongName := ExpandFileName(FileName);
+{$IFEND}
 SetLength(fShortName,MAX_PATH);
+{$IF Defined(FPC) and not Defined(Unicode)}
+SetLength(fShortName,GetShortPathName(PChar(UTF8ToWinCP(fLongName)),PChar(fShortName),Length(fShortName)));
+fShortName := WinCPToUTF8(fShortName);
+{$ELSE}
 SetLength(fShortName,GetShortPathName(PChar(fLongName),PChar(fShortName),Length(fShortName)));
+{$IFEND}
 If CheckFileExists then
   begin
+  {$IF Defined(FPC) and not Defined(Unicode)}
+    fFileHandle := CreateFile(PChar(UTF8ToWinCP(fLongName)),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+  {$ELSE}
     fFileHandle := CreateFile(PChar(fLongName),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+  {$IFEND}
     If fFileHandle <> INVALID_HANDLE_VALUE then
       begin
         If LoadingStrategyFlag(WFI_LS_LoadSize) then LoadSize;
@@ -1043,7 +1074,10 @@ var
   ModuleFileName: String;
 begin
 SetLength(ModuleFileName,MAX_PATH);
-SetLength(ModuleFIleName,GetModuleFileName(hInstance,PChar(ModuleFileName),Length(ModuleFileName)));
+SetLength(ModuleFileName,GetModuleFileName(hInstance,PChar(ModuleFileName),Length(ModuleFileName)));
+{$IF Defined(FPC) and not Defined(Unicode)}
+ModuleFileName := WinCPToUTF8(ModuleFileName);
+{$IFEND}
 Create(ModuleFileName,LoadingStrategy);
 end;
 
@@ -1076,20 +1110,32 @@ end;
 //------------------------------------------------------------------------------
 
 Function TWinFileInfo.IndexOfVersionInfoStringTable(Translation: DWord): Integer;
+var
+  i:  Integer;
 begin
-For Result := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
-  If fVersionInfoStringTables[Result].Translation.Translation = Translation then Exit;
 Result := -1;
+For i := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
+  If fVersionInfoStringTables[i].Translation.Translation = Translation then
+    begin
+      Result := i;
+      Exit;
+    end;
 end;
 
 //------------------------------------------------------------------------------
 
 Function TWinFileInfo.IndexOfVersionInfoString(Table: Integer; const Key: String): Integer;
+var
+  i:  Integer;
 begin
-with GetVersionInfoStringTable(Table) do
-  For Result := Low(Strings) to High(Strings) do
-    If AnsiSameText(Strings[Result].Key,Key) then Exit;
 Result := -1;
+with GetVersionInfoStringTable(Table) do
+  For i := Low(Strings) to High(Strings) do
+    If AnsiSameText(Strings[i].Key,Key) then
+      begin
+        Result := i;
+        Exit;
+      end;
 end;
 
 //------------------------------------------------------------------------------
