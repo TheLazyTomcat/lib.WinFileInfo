@@ -871,7 +871,11 @@ fVersionInfoPresent := fVerInfoSize > 0;
 If fVersionInfoPresent then
   begin
     fVerInfoData := AllocMem(fVerInfoSize);
+  {$IF Defined(FPC) and not Defined(Unicode)}
+    If GetFileVersionInfo(PChar(UTF8ToWinCP(fLongName)),0,fVerInfoSize,fVerInfoData) then
+  {$ELSE}
     If GetFileVersionInfo(PChar(fLongName),0,fVerInfoSize,fVerInfoData) then
+  {$IFEND}
       begin
         If LoadingStrategyFlag(WFI_LS_LoadFixedFileInfo) then
           VersionInfo_LoadFixedFileInfo;
