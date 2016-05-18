@@ -9,9 +9,9 @@
 
   WinFileInfo
 
-  ©František Milt 2016-03-01
+  ©František Milt 2016-05-18
 
-  Version 1.0.3
+  Version 1.0.4
 
 ===============================================================================}
 unit WinFileInfo;
@@ -29,17 +29,20 @@ const
   // Loading strategy flags.
   // Loading strategy affects what file information will be loaded and
   // decoded/parsed.
-  WFI_LS_LoadSize            = $00000001;
-  WFI_LS_LoadTime            = $00000002;
-  WFI_LS_LoadAttributes      = $00000004;
-  WFI_LS_DecodeAttributes    = $00000008;
-  WFI_LS_LoadVersionInfo     = $00000010;
-  WFI_LS_ParseVersionInfo    = $00000020;
-  WFI_LS_LoadFixedFileInfo   = $00000040;
-  WFI_LS_DecodeFixedFileInfo = $00000080;
+  WFI_LS_LoadSize                   = $00000001;
+  WFI_LS_LoadTime                   = $00000002;
+  WFI_LS_LoadAttributes             = $00000004;
+  WFI_LS_DecodeAttributes           = $00000008;
+  WFI_LS_LoadVersionInfo            = $00000010;
+  WFI_LS_ParseVersionInfo           = $00000020;
+  WFI_LS_LoadFixedFileInfo          = $00000040;
+  WFI_LS_DecodeFixedFileInfo        = $00000080;
+  WFI_LS_VerInfoDefaultKeys         = $00000100;
+  WFI_LS_VerInfoExtractTranslations = $00000200;
 
   WFI_LS_LoadNone            = $00000000;
   WFI_LS_BasicInfo           = $0000000F;
+  WFI_LS_FullInfo            = $000000FF;
   WFI_LS_All                 = $FFFFFFFF;
 
   // File attributes flags
@@ -261,6 +264,9 @@ type
 {==============================================================================}
   TWinFileInfo = class(TObject)
   private
+    fLoadingStrategy:         UInt32;
+    fFormatSettings:          TFormatSettings;
+    fFileHandle:              THandle;
     fExists:                  Boolean;
     fLongName:                String;
     fShortName:               String;
@@ -273,6 +279,8 @@ type
     fAttributesStr:           String;
     fAttributesText:          String;
     fAttributesDecoded:       TFileAttributesDecoded;
+    fVerInfoSize:             TMemSize;
+    fVerInfoData:             Pointer;
     fVersionInfoPresent:      Boolean;
     fVersionInfoFFIPresent:   Boolean;
     fVersionInfoFFI:          TVSFixedFileInfo;
@@ -280,11 +288,6 @@ type
     fVersionInfoStringTables: array of TStringTable;
     fVersionInfoParsed:       Boolean;
     fVersionInfoStruct:       TVersionInfoStruct;
-    fLoadingStrategy:         UInt32;
-    fFormatSettings:          TFormatSettings;
-    fFileHandle:              THandle;
-    fVerInfoSize:             TMemSize;
-    fVerInfoData:             Pointer;
     Function GetVersionInfoTranslation(Index: Integer): TTranslationItem;
     Function GetVersionInfoStringTableCount: Integer;
     Function GetVersionInfoStringTable(Index: Integer): TStringTable;
@@ -297,6 +300,7 @@ type
     Function LoadingStrategyFlag(Flag: UInt32): Boolean; virtual;
     procedure VersionInfo_LoadStrings; virtual;
     procedure VersionInfo_EnumerateKeys; virtual;
+    procedure VersionInfo_ExtractTranslations; virtual;
     procedure VersionInfo_Parse; virtual;
     procedure VersionInfo_LoadTranslations; virtual;
     procedure VersionInfo_LoadFixedFileInfo; virtual;
@@ -305,6 +309,7 @@ type
     procedure LoadTime; virtual;
     procedure LoadSize; virtual;
     Function CheckFileExists: Boolean; virtual;
+    procedure Clear; virtual;    
     procedure Initialize(const FileName: String); virtual;
     procedure Finalize; virtual;
   public
@@ -314,7 +319,10 @@ type
     procedure Refresh; virtual;
     Function IndexOfVersionInfoStringTable(Translation: DWord): Integer; virtual;
     Function IndexOfVersionInfoString(Table: Integer; const Key: String): Integer; virtual;
-    Function CreateReport: String; virtual;
+    Function CreateReport(DoRefresh: Boolean = False): String; virtual;
+    property LoadingStrategy: UInt32 read fLoadingStrategy write fLoadingStrategy;
+    property FormatSettings: TFormatSettings read fFormatSettings write fFormatSettings;
+    property FileHandle: THandle read fFileHandle;
     property Exists: Boolean read fExists;
     property Name: String read fLongName;
     property LongName: String read fLongName;
@@ -328,6 +336,8 @@ type
     property AttributesStr: String read fAttributesStr;
     property AttributesText: String read fAttributesText;
     property AttributesDecoded: TFileAttributesDecoded read fAttributesDecoded;
+    property VerInfoSize: PtrUInt read fVerInfoSize;
+    property VerInfoData: Pointer read fVerInfoData;
     property VersionInfoPresent: Boolean read fVersionInfoPresent;
     property VersionInfoFixedFileInfoPresent: Boolean read fVersionInfoFFIPresent;
     property VersionInfoFixedFileInfo: TVSFixedFileInfo read fVersionInfoFFI;
@@ -343,11 +353,6 @@ type
     property VersionInfoValues[const Language,Key: String]: String read GetVersionInfoValue; default;
     property VersionInfoParsed: Boolean read fVersionInfoParsed;
     property VersionInfoStruct: TVersionInfoStruct read fVersionInfoStruct;
-    property LoadingStrategy: UInt32 read fLoadingStrategy write fLoadingStrategy;    
-    property FormatSettings: TFormatSettings read fFormatSettings write fFormatSettings;
-    property FileHandle: THandle read fFileHandle;
-    property VerInfoSize: PtrUInt read fVerInfoSize;
-    property VerInfoData: Pointer read fVerInfoData;
   end;
 
 {==============================================================================}
@@ -436,7 +441,7 @@ const
     (Flag: VFT_UNKNOWN;    Text: 'Unknown'),
     (Flag: VFT_VXD;        Text: 'Virtual device'));
 
-  FFI_FIleSubtypeStrings_DRV: array[0..11] of TFlagText = (
+  FFI_FileSubtypeStrings_DRV: array[0..11] of TFlagText = (
     (Flag: VFT2_DRV_COMM;              Text: 'Communications driver'),
     (Flag: VFT2_DRV_DISPLAY;           Text: 'Display driver'),
     (Flag: VFT2_DRV_INSTALLABLE;       Text: 'Installable driver'),
@@ -450,7 +455,7 @@ const
     (Flag: VFT2_DRV_VERSIONED_PRINTER; Text: 'Versioned printer driver'),
     (Flag: VFT2_UNKNOWN;               Text: 'Unknown'));
 
-  FFI_FIleSubtypeStrings_FONT: array[0..3] of TFlagText = (
+  FFI_FileSubtypeStrings_FONT: array[0..3] of TFlagText = (
     (Flag: VFT2_FONT_RASTER;   Text: 'Raster font'),
     (Flag: VFT2_FONT_TRUETYPE; Text: 'TrueType font'),
     (Flag: VFT2_FONT_VECTOR;   Text: 'Vector font'),
@@ -460,6 +465,34 @@ const
     'Comments','CompanyName','FileDescription','FileVersion','InternalName',
     'LegalCopyright','LegalTrademarks','OriginalFilename','ProductName',
     'ProductVersion','PrivateBuild','SpecialBuild');
+
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                              Auxiliary functions                             }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{$IF not Declared(CP_THREAD_ACP)}
+const
+  CP_THREAD_ACP = 3;
+{$IFEND}
+
+Function WideToString(const WStr: WideString; {%H-}AnsiCodePage: UINT = CP_THREAD_ACP): String;
+begin
+{$IFDEF Unicode}
+Result := WStr;
+{$ELSE}
+{$IFDEF FPC}
+Result := UTF8Encode(WStr);
+{$ELSE}
+SetLength(Result,WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),nil,0,nil,nil));
+WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),PAnsiChar(Result),Length(Result) * SizeOf(AnsiChar),nil,nil);
+// A wrong codepage might be stored, try translation with default cp
+If (AnsiCodePage <> CP_THREAD_ACP) and (Length(Result) <= 0) and (Length(WStr) > 0) then
+  Result := WideToString(WStr);
+{$ENDIF}
+{$ENDIF}
+end;
 
 {==============================================================================}
 {------------------------------------------------------------------------------}
@@ -596,23 +629,34 @@ end;
 
 procedure TWinFileInfo.VersionInfo_LoadStrings;
 var
-  Table,i:  Integer;
+  Table:    Integer;
+  i,j:      Integer;
   StrPtr:   Pointer;
   StrSize:  UInt32;
 begin
 For Table := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
   with fVersionInfoStringTables[Table] do
     begin
-      For i := Low(Strings) to High(Strings) do
+      For i := High(Strings) downto Low(Strings) do
         begin
+        {$IFDEF FPC}
+          If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Translation.LanguageStr,UTF8ToWinCP(Strings[i].Key)])),{%H-}StrPtr,{%H-}StrSize) then
+        {$ELSE}
           If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Translation.LanguageStr,Strings[i].Key])),{%H-}StrPtr,{%H-}StrSize) then
-          {$If defined(FPC) and not defined(Unicode)}
-            Strings[i].Value := WinCPToUTF8(PChar(StrPtr))
-          {$ELSE}
-            Strings[i].Value := PChar(StrPtr)
-          {$IFEND}
+        {$ENDIF}
+            begin
+            {$If defined(FPC) and not defined(Unicode)}
+              Strings[i].Value := WinCPToUTF8(PChar(StrPtr))
+            {$ELSE}
+              Strings[i].Value := PChar(StrPtr)
+            {$IFEND}
+            end
           else
-            Strings[i].Value := '';
+            begin
+              For j := i to Pred(High(Strings)) do
+                Strings[j] := Strings[j + 1];
+              SetLength(Strings,Length(Strings) - 1);
+            end;
         end;
     end;
 end;
@@ -625,23 +669,63 @@ var
   i,j,k:  Integer;
 begin
 For i := Low(fVersionInfoStruct.StringFileInfos) to High(fVersionInfoStruct.StringFileInfos) do
-  If AnsiSameText(UTF8Encode(fVersionInfoStruct.StringFileInfos[i].Key),'StringFileInfo') then
+  If AnsiSameText(WideToString(fVersionInfoStruct.StringFileInfos[i].Key),'StringFileInfo') then
     For Table := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
       with fVersionInfoStruct.StringFileInfos[i] do
         begin
           For j := Low(StringTables) to High(StringTables) do
-            If AnsiSameText(UTF8Encode(StringTables[j].Key),fVersionInfoStringTables[Table].Translation.LanguageStr) then
+            If AnsiSameText(WideToString(StringTables[j].Key),fVersionInfoStringTables[Table].Translation.LanguageStr) then
               begin
                 SetLength(fVersionInfoStringTables[Table].Strings,Length(StringTables[j].Strings));
                 For k := Low(StringTables[j].Strings) to High(StringTables[j].Strings) do
-                   fVersionInfoStringTables[Table].Strings[k].Key := UTF8Encode(StringTables[j].Strings[k].Key);
+                  fVersionInfoStringTables[Table].Strings[k].Key := WideToString(StringTables[j].Strings[k].Key,fVersionInfoStringTables[Table].Translation.CodePage);
               end;
-          If Length(fVersionInfoStringTables[Table].Strings) <= 0 then
+          If (Length(fVersionInfoStringTables[Table].Strings) <= 0) and LoadingStrategyFlag(WFI_LS_VerInfoDefaultKeys) then
             begin
               SetLength(fVersionInfoStringTables[Table].Strings,Length(VerInfo_DefaultKeys));
               For j := Low(VerInfo_DefaultKeys) to High(VerInfo_DefaultKeys) do
                 fVersionInfoStringTables[Table].Strings[j].Key := VerInfo_DefaultKeys[j];
             end;
+        end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TWinFileInfo.VersionInfo_ExtractTranslations;
+var
+  i,Table:  Integer;
+
+  Function TranslationIsListed(const LanguageStr: String): Boolean;
+  var
+    ii: Integer;
+  begin
+    Result := False;
+    For ii := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
+      If AnsiSameText(fVersionInfoStringTables[ii].Translation.LanguageStr,LanguageStr) then
+        begin
+          Result := True;
+          Break;
+        end;
+  end;
+
+begin
+For i := Low(fVersionInfoStruct.StringFileInfos) to High(fVersionInfoStruct.StringFileInfos) do
+  If AnsiSameText(WideToString(fVersionInfoStruct.StringFileInfos[i].Key),'StringFileInfo') then
+    For Table := Low(fVersionInfoStruct.StringFileInfos[i].StringTables) to High(fVersionInfoStruct.StringFileInfos[i].StringTables) do
+      If not TranslationIsListed(WideToString(fVersionInfoStruct.StringFileInfos[i].StringTables[Table].Key)) then
+        begin
+          SetLength(fVersionInfoStringTables,Length(fVersionInfoStringTables) + 1);
+          with fVersionInfoStringTables[High(fVersionInfoStringTables)].Translation do
+            begin
+              LanguageStr := WideToString(fVersionInfoStruct.StringFileInfos[i].StringTables[Table].Key);
+              Language := StrToIntDef('$' + Copy(LanguageStr,1,4),0);
+              CodePage := StrToIntDef('$' + Copy(LanguageStr,5,4),0);
+              SetLength(LanguageName,256);
+              SetLength(LanguageName,VerLanguageName(Translation,PChar(LanguageName),Length(LanguageName)));
+            {$If defined(FPC) and not defined(Unicode)}
+              LanguageName := WinCPToUTF8(LanguageName);
+            {$IFEND}
+            end;                                           
         end;
 end;
 
@@ -700,7 +784,7 @@ If (fVerInfoSize >= 6) and (fVerInfoSize >= PUInt16(fVerInfoData)^) then
     while CheckPointer(CurrentAddress,@fVersionInfoStruct) do
       begin
         ParseBlock(CurrentAddress,@TempBlock);
-        If AnsiSameText(UTF8Encode(TempBlock.Key),'StringFileInfo') then
+        If AnsiSameText(WideToString(TempBlock.Key),'StringFileInfo') then
           begin
             SetLength(fVersionInfoStruct.StringFileInfos,Length(fVersionInfoStruct.StringFileInfos) + 1);
             with fVersionInfoStruct.StringFileInfos[High(fVersionInfoStruct.StringFileInfos)] do
@@ -724,7 +808,7 @@ If (fVerInfoSize >= 6) and (fVerInfoSize >= PUInt16(fVerInfoData)^) then
                   end;
               end
           end
-        else If AnsiSameText(UTF8Encode(TempBlock.Key),'VarFileInfo') then
+        else If AnsiSameText(WideToString(TempBlock.Key),'VarFileInfo') then
           begin
             SetLength(fVersionInfoStruct.VarFileInfos,Length(fVersionInfoStruct.VarFileInfos) + 1);
             with fVersionInfoStruct.VarFileInfos[High(fVersionInfoStruct.VarFileInfos)] do
@@ -744,7 +828,7 @@ If (fVerInfoSize >= 6) and (fVerInfoSize >= PUInt16(fVerInfoData)^) then
           end
         else raise Exception.CreateFmt('TWinFileInfo.VersionInfo_Parse: Unknown block (%s).',[TempBlock.Key]);
       end;
-    fVersionInfoParsed := True;  
+    fVersionInfoParsed := True;
   except
     fVersionInfoParsed := False;
     SetLength(fVersionInfoStruct.StringFileInfos,0);
@@ -883,7 +967,9 @@ If fVersionInfoPresent then
         If LoadingStrategyFlag(WFI_LS_ParseVersionInfo) then
           begin
             VersionInfo_Parse;
-            VersionInfo_EnumerateKeys;
+            If LoadingStrategyFlag(WFI_LS_VerInfoExtractTranslations) then
+              VersionInfo_ExtractTranslations;
+            VersionInfo_EnumerateKeys;  
           end;
         VersionInfo_LoadStrings;
       end
@@ -901,6 +987,7 @@ end;
 
 procedure TWinFileInfo.LoadAttributes;
 
+  // This function also fills AttributesStr and AttributesText strings
   Function CheckAttribute(AttributeFlag: DWord): Boolean;
   var
     i:  Integer;
@@ -920,23 +1007,23 @@ procedure TWinFileInfo.LoadAttributes;
 begin
 If LoadingStrategyFlag(WFI_LS_DecodeAttributes) then
   begin
-    fAttributesDecoded.Archive := CheckAttribute(FILE_ATTRIBUTE_ARCHIVE);
-    fAttributesDecoded.Compressed := CheckAttribute(FILE_ATTRIBUTE_COMPRESSED);
-    fAttributesDecoded.Device := CheckAttribute(FILE_ATTRIBUTE_DEVICE);
-    fAttributesDecoded.Directory := CheckAttribute(FILE_ATTRIBUTE_DIRECTORY);
-    fAttributesDecoded.Encrypted := CheckAttribute(FILE_ATTRIBUTE_ENCRYPTED);
-    fAttributesDecoded.Hidden := CheckAttribute(FILE_ATTRIBUTE_HIDDEN);
-    fAttributesDecoded.IntegrityStream := CheckAttribute(FILE_ATTRIBUTE_INTEGRITY_STREAM);
-    fAttributesDecoded.Normal := CheckAttribute(FILE_ATTRIBUTE_NORMAL);
+    fAttributesDecoded.Archive           := CheckAttribute(FILE_ATTRIBUTE_ARCHIVE);
+    fAttributesDecoded.Compressed        := CheckAttribute(FILE_ATTRIBUTE_COMPRESSED);
+    fAttributesDecoded.Device            := CheckAttribute(FILE_ATTRIBUTE_DEVICE);
+    fAttributesDecoded.Directory         := CheckAttribute(FILE_ATTRIBUTE_DIRECTORY);
+    fAttributesDecoded.Encrypted         := CheckAttribute(FILE_ATTRIBUTE_ENCRYPTED);
+    fAttributesDecoded.Hidden            := CheckAttribute(FILE_ATTRIBUTE_HIDDEN);
+    fAttributesDecoded.IntegrityStream   := CheckAttribute(FILE_ATTRIBUTE_INTEGRITY_STREAM);
+    fAttributesDecoded.Normal            := CheckAttribute(FILE_ATTRIBUTE_NORMAL);
     fAttributesDecoded.NotContentIndexed := CheckAttribute(FILE_ATTRIBUTE_NOT_CONTENT_INDEXED);
-    fAttributesDecoded.NoScrubData := CheckAttribute(FILE_ATTRIBUTE_NO_SCRUB_DATA);
-    fAttributesDecoded.Offline := CheckAttribute(FILE_ATTRIBUTE_OFFLINE);
-    fAttributesDecoded.ReadOnly := CheckAttribute(FILE_ATTRIBUTE_READONLY);
-    fAttributesDecoded.ReparsePoint := CheckAttribute(FILE_ATTRIBUTE_REPARSE_POINT);
-    fAttributesDecoded.SparseFile := CheckAttribute(FILE_ATTRIBUTE_SPARSE_FILE);
-    fAttributesDecoded.System := CheckAttribute(FILE_ATTRIBUTE_SYSTEM);
-    fAttributesDecoded.Temporary := CheckAttribute(FILE_ATTRIBUTE_TEMPORARY);
-    fAttributesDecoded.Virtual := CheckAttribute(FILE_ATTRIBUTE_VIRTUAL);
+    fAttributesDecoded.NoScrubData       := CheckAttribute(FILE_ATTRIBUTE_NO_SCRUB_DATA);
+    fAttributesDecoded.Offline           := CheckAttribute(FILE_ATTRIBUTE_OFFLINE);
+    fAttributesDecoded.ReadOnly          := CheckAttribute(FILE_ATTRIBUTE_READONLY);
+    fAttributesDecoded.ReparsePoint      := CheckAttribute(FILE_ATTRIBUTE_REPARSE_POINT);
+    fAttributesDecoded.SparseFile        := CheckAttribute(FILE_ATTRIBUTE_SPARSE_FILE);
+    fAttributesDecoded.System            := CheckAttribute(FILE_ATTRIBUTE_SYSTEM);
+    fAttributesDecoded.Temporary         := CheckAttribute(FILE_ATTRIBUTE_TEMPORARY);
+    fAttributesDecoded.Virtual           := CheckAttribute(FILE_ATTRIBUTE_VIRTUAL);
   end;
 end;
 
@@ -957,9 +1044,9 @@ var
       begin
         If FileTimeToSystemTime(LocalTime,{%H-}SystemTime) then
           Result := SystemTimeToDateTime(SystemTime)
-        else raise Exception.CreateFmt('TWinFileInfo.LoadTime.FileTimeToDateTime: Unable to convert to system time ("%s",0x%x).',[fLongName,GetLastError]);
+        else raise Exception.CreateFmt('TWinFileInfo.LoadTime.FileTimeToDateTime: Unable to convert to system time ("%s", 0x%.8x).',[fLongName,GetLastError]);
       end
-    else raise Exception.CreateFmt('TWinFileInfo.LoadTime.FileTimeToDateTime: Unable to convert to local time ("%s",0x%x).',[fLongName,GetLastError]);
+    else raise Exception.CreateFmt('TWinFileInfo.LoadTime.FileTimeToDateTime: Unable to convert to local time ("%s", 0x%.8x).',[fLongName,GetLastError]);
   end;
 
 begin
@@ -969,7 +1056,7 @@ If GetFileTime(fFileHandle,@Creation,@LastAccess,@LastWrite) then
     fLastAccessTime := FileTimeToDateTime(LastAccess);
     fLastWriteTime := FileTimeToDateTime(LastWrite);
   end
-else raise Exception.CreateFmt('TWinFileInfo.LoadTime: Unable to obtain file time ("%s",0x%x).',[fLongName,GetLastError]);
+else raise Exception.CreateFmt('TWinFileInfo.LoadTime: Unable to obtain file time ("%s", 0x%.8x).',[fLongName,GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -979,7 +1066,7 @@ begin
 If GetFileSizeEx(fFileHandle,@fSize) then
   fSizeStr := SizeToStr(fSize)
 else
-  raise Exception.CreateFmt('TWinFileInfo.GetFileSize: Unable to obtain file size ("%s",0x%x).',[fLongName,GetLastError]);
+  raise Exception.CreateFmt('TWinFileInfo.GetFileSize: Unable to obtain file size ("%s", 0x%.8x).',[fLongName,GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -998,9 +1085,8 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TWinFileInfo.Initialize(const FileName: String);
+procedure TWinFileInfo.Clear;
 begin
-// Clear everything that might not be loaded depending on loading strategy
 fSize := 0;
 fSizeStr := '';
 fCreationTime := 0;
@@ -1025,7 +1111,12 @@ SetLength(fVersionInfoStruct.StringFileInfos,0);
 SetLength(fVersionInfoStruct.VarFileInfos,0);
 fVersionInfoStruct.Key := '';
 FillChar(fVersionInfoStruct,SizeOf(fVersionInfoStruct),0);
-// Start loading
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TWinFileInfo.Initialize(const FileName: String);
+begin
 {$IF Defined(FPC) and not Defined(Unicode) and (FPC_FULLVERSION < 20701)}
 fLongName := ExpandFileNameUTF8(FileName);
 {$ELSE}
@@ -1053,7 +1144,7 @@ If CheckFileExists then
           else fAttributesFlags := 0;
         If LoadingStrategyFlag(WFI_LS_LoadVersionInfo) then LoadVersionInfo;
       end
-    else raise Exception.CreateFmt('TWinFileInfo.Initialize: Failed to open requested file ("%s",0x%x).',[fLongName,GetLastError]);
+    else raise Exception.CreateFmt('TWinFileInfo.Initialize: Failed to open requested file ("%s", 0x%.8x).',[fLongName,GetLastError]);
   end;
 end;
 
@@ -1087,7 +1178,7 @@ end;
 
 //--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
-constructor TWinFileInfo.Create(const FileName: String; LoadingStrategy: Uint32 = WFI_LS_All);
+constructor TWinFileInfo.Create(const FileName: String; LoadingStrategy: UInt32 = WFI_LS_All);
 begin
 inherited Create;
 fLoadingStrategy := LoadingStrategy;
@@ -1107,6 +1198,7 @@ end;
 
 procedure TWinFileInfo.Refresh;
 begin
+Clear;
 Finalize;
 Initialize(fLongName);
 end;
@@ -1144,11 +1236,16 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TWinFileInfo.CreateReport: String;
+Function TWinFileInfo.CreateReport(DoRefresh: Boolean = False): String;
 var
   i,j:  Integer;
   Len:  Integer;
 begin
+If DoRefresh then
+  begin
+    fLoadingStrategy := WFI_LS_All;
+    Refresh;
+  end;
 with TStringList.Create do
   begin
     Add('=== TWinInfoFile report, created on ' + DateTimeToStr(Now,fFormatSettings) + ' ===');
