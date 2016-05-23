@@ -9,9 +9,9 @@
 
   WinFileInfo
 
-  ©František Milt 2016-05-18
+  ©František Milt 2016-05-23
 
-  Version 1.0.4
+  Version 1.0.5
 
 ===============================================================================}
 unit WinFileInfo;
@@ -40,10 +40,17 @@ const
   WFI_LS_VerInfoDefaultKeys         = $00000100;
   WFI_LS_VerInfoExtractTranslations = $00000200;
 
+  // Combined loading strategy flags.
   WFI_LS_LoadNone            = $00000000;
   WFI_LS_BasicInfo           = $0000000F;
   WFI_LS_FullInfo            = $000000FF;
   WFI_LS_All                 = $FFFFFFFF;
+  WFI_LS_VersionInfo         = WFI_LS_LoadVersionInfo or
+                               WFI_LS_ParseVersionInfo or
+                               WFI_LS_VerInfoExtractTranslations;
+  WFI_LS_VersionInfoAndFFI   = WFI_LS_VersionInfo or
+                               WFI_LS_LoadFixedFileInfo or
+                               WFI_LS_DecodeFixedFileInfo;  
 
   // File attributes flags
   INVALID_FILE_ATTRIBUTES = DWORD(-1); 
