@@ -20,6 +20,12 @@ unit WinFileInfo;
   {$MESSAGE FATAL 'Unsupported operating system.'}
 {$IFEND}
 
+{$IFDEF FPC}
+  {$MODE ObjFPC}{$H+}
+  // Activate symbol BARE_FPC if you want to compile this unit outside of Lazarus.
+  {.$DEFINE BARE_FPC}
+{$ENDIF}
+
 interface
 
 uses
@@ -383,9 +389,15 @@ const
 implementation
 
 uses
-  Classes{$IFDEF FPC}, LazUTF8{$IF (FPC_FULLVERSION < 20701)}, LazFileUTils{$IFEND}{$ENDIF};
+  Classes
+{$IF Defined(FPC) and not Defined(Unicode) and not Defined(BARE_FPC)}
+    , LazUTF8
+  {$IF (FPC_FULLVERSION < 20701)}
+    , LazFileUTils
+  {$IFEND}
+{$IFEND};
 
-{$If not declared(GetFileSizeEx)}
+{$IF not Declared(GetFileSizeEx)}
 Function GetFileSizeEx(hFile: THandle; lpFileSize: PInt64): BOOL; stdcall; external 'kernel32.dll';
 {$IFEND}
 
@@ -616,8 +628,12 @@ begin
 Result := '';
 If fVersionInfoPresent and (Language <> '') and (Key <> '') then
   If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Language,Key])),{%H-}StrPtr,{%H-}StrSize) then
-  {$If defined(FPC) and not defined(Unicode)}
+  {$IF defined(FPC) and not defined(Unicode)}
+  {$IFDEF BARE_FPC}
+    Result := AnsiToUTF8(PChar(StrPtr));
+  {$ELSE}
     Result := WinCPToUTF8(PChar(StrPtr));
+  {$ENDIF}
   {$ELSE}
     Result := PChar(StrPtr);
   {$IFEND}
@@ -646,14 +662,22 @@ For Table := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
     begin
       For i := High(Strings) downto Low(Strings) do
         begin
-        {$IFDEF FPC}
+        {$IF defined(FPC) and not defined(Unicode)}
+        {$IFDEF BARE_FPC}
+          If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Translation.LanguageStr,UTF8ToAnsi(Strings[i].Key)])),{%H-}StrPtr,{%H-}StrSize) then
+        {$ELSE}
           If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Translation.LanguageStr,UTF8ToWinCP(Strings[i].Key)])),{%H-}StrPtr,{%H-}StrSize) then
+        {$ENDIF}
         {$ELSE}
           If VerQueryValue(fVerInfoData,PChar(Format('\StringFileInfo\%s\%s',[Translation.LanguageStr,Strings[i].Key])),{%H-}StrPtr,{%H-}StrSize) then
-        {$ENDIF}
+        {$IFEND}
             begin
-            {$If defined(FPC) and not defined(Unicode)}
+            {$IF defined(FPC) and not defined(Unicode)}
+            {$IFDEF BARE_FPC}
+              Strings[i].Value := AnsiToUTF8(PChar(StrPtr))
+            {$ELSE}
               Strings[i].Value := WinCPToUTF8(PChar(StrPtr))
+            {$ENDIF}
             {$ELSE}
               Strings[i].Value := PChar(StrPtr)
             {$IFEND}
@@ -729,8 +753,12 @@ For i := Low(fVersionInfoStruct.StringFileInfos) to High(fVersionInfoStruct.Stri
               CodePage := StrToIntDef('$' + Copy(LanguageStr,5,4),0);
               SetLength(LanguageName,256);
               SetLength(LanguageName,VerLanguageName(Translation,PChar(LanguageName),Length(LanguageName)));
-            {$If defined(FPC) and not defined(Unicode)}
+            {$IF defined(FPC) and not defined(Unicode)}
+            {$IFDEF BARE_FPC}
+              LanguageName := AnsiToUTF8(LanguageName);
+            {$ELSE}
               LanguageName := WinCPToUTF8(LanguageName);
+            {$ENDIF}
             {$IFEND}
             end;                                           
         end;
@@ -863,8 +891,12 @@ If VerQueryValue(fVerInfoData,'\VarFileInfo\Translation',{%H-}TrsPtr,{%H-}TrsSiz
           Translation := {%H-}PUInt32({%H-}PtrUInt(TrsPtr) + (UInt32(i) * SizeOf(UInt32)))^;
           SetLength(LanguageName,256);
           SetLength(LanguageName,VerLanguageName(Translation,PChar(LanguageName),Length(LanguageName)));
-        {$If defined(FPC) and not defined(Unicode)}
+        {$IF defined(FPC) and not defined(Unicode)}
+        {$IFDEF BARE_FPC}
+          LanguageName := AnsiToUTF8(LanguageName);
+        {$ELSE}
           LanguageName := WinCPToUTF8(LanguageName);
+        {$ENDIF}
         {$IFEND}
           LanguageStr := IntToHex(Language,4) + IntToHex(CodePage,4);
         end;
@@ -954,7 +986,11 @@ var
   Dummy:  DWord;
 begin
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+fVerInfoSize := GetFileVersionInfoSize(PChar(UTF8ToAnsi(fLongName)),{%H-}Dummy);
+{$ELSE}
 fVerInfoSize := GetFileVersionInfoSize(PChar(UTF8ToWinCP(fLongName)),{%H-}Dummy);
+{$ENDIF}
 {$ELSE}
 fVerInfoSize := GetFileVersionInfoSize(PChar(fLongName),{%H-}Dummy);
 {$IFEND}
@@ -963,7 +999,11 @@ If fVersionInfoPresent then
   begin
     fVerInfoData := AllocMem(fVerInfoSize);
   {$IF Defined(FPC) and not Defined(Unicode)}
+  {$IFDEF BARE_FPC}
+    If GetFileVersionInfo(PChar(UTF8ToAnsi(fLongName)),0,fVerInfoSize,fVerInfoData) then
+  {$ELSE}
     If GetFileVersionInfo(PChar(UTF8ToWinCP(fLongName)),0,fVerInfoSize,fVerInfoData) then
+  {$ENDIF}
   {$ELSE}
     If GetFileVersionInfo(PChar(fLongName),0,fVerInfoSize,fVerInfoData) then
   {$IFEND}
@@ -1081,7 +1121,11 @@ end;
 Function TWinFileInfo.CheckFileExists: Boolean;
 begin
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+fAttributesFlags := GetFileAttributes(PChar(UTF8ToAnsi(fLongName)));
+{$ELSE}
 fAttributesFlags := GetFileAttributes(PChar(UTF8ToWinCP(fLongName)));
+{$ENDIF}
 {$ELSE}
 fAttributesFlags := GetFileAttributes(PChar(fLongName));
 {$IFEND}
@@ -1124,22 +1168,31 @@ end;
 
 procedure TWinFileInfo.Initialize(const FileName: String);
 begin
-{$IF Defined(FPC) and not Defined(Unicode) and (FPC_FULLVERSION < 20701)}
+{$IF Defined(FPC) and not Defined(Unicode) and (FPC_FULLVERSION < 20701) and not Defined(BARE_FPC)}
 fLongName := ExpandFileNameUTF8(FileName);
 {$ELSE}
 fLongName := ExpandFileName(FileName);
 {$IFEND}
 SetLength(fShortName,MAX_PATH);
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+SetLength(fShortName,GetShortPathName(PChar(UTF8ToAnsi(fLongName)),PChar(fShortName),Length(fShortName)));
+fShortName := AnsiToUTF8(fShortName);
+{$ELSE}
 SetLength(fShortName,GetShortPathName(PChar(UTF8ToWinCP(fLongName)),PChar(fShortName),Length(fShortName)));
 fShortName := WinCPToUTF8(fShortName);
+{$ENDIF}
 {$ELSE}
 SetLength(fShortName,GetShortPathName(PChar(fLongName),PChar(fShortName),Length(fShortName)));
 {$IFEND}
 If CheckFileExists then
   begin
   {$IF Defined(FPC) and not Defined(Unicode)}
+  {$IFDEF BARE_FPC}
+    fFileHandle := CreateFile(PChar(UTF8ToAnsi(fLongName)),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+  {$ELSE}
     fFileHandle := CreateFile(PChar(UTF8ToWinCP(fLongName)),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+  {$ENDIF}
   {$ELSE}
     fFileHandle := CreateFile(PChar(fLongName),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
   {$IFEND}
@@ -1178,7 +1231,11 @@ begin
 SetLength(ModuleFileName,MAX_PATH);
 SetLength(ModuleFileName,GetModuleFileName(hInstance,PChar(ModuleFileName),Length(ModuleFileName)));
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+ModuleFileName := AnsiToUTF8(ModuleFileName);
+{$ELSE}
 ModuleFileName := WinCPToUTF8(ModuleFileName);
+{$ENDIF}
 {$IFEND}
 Create(ModuleFileName,LoadingStrategy);
 end;
