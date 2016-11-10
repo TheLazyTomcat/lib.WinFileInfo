@@ -13,6 +13,9 @@
 
   Version 1.0.5
 
+  Dependencies:
+    AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
+
 ===============================================================================}
 unit WinFileInfo;
 
