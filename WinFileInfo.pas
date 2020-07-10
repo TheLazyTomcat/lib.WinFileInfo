@@ -12,16 +12,18 @@
     Main aim of this library is to provide a simple way of obtaining file
     information such as size, attributes, time of creation and, in case of
     binaries, a version information.
+
     A complete parsing of raw version information data is implemented, so
     it is possible to obtain information even from badly constructed version
     info resource.
+
     Although the library is writen only for Windows OS, it can be compiled for
-    other systems. But in such case, it provides only a routine for conversion
-    of file size into a textual representation (with proper units).
+    other systems too. But in such case, it provides only a routine for
+    conversion of file size into a textual representation (with proper units).
 
-  Version 1.0.7 (2020-01-04)
+  Version 1.0.8 (2020-07-10)
 
-  Last change 2020-01-04
+  Last change 2020-07-10
 
   ©2015-2020 František Milt
 
@@ -78,17 +80,8 @@ unit WinFileInfo;
 interface
 
 uses
-  SysUtils
-{$IFDEF LimitedImplementation}
-  // non-win
-  {$IFNDEF FPC}
-  ,AuxTypes
-  {$ENDIF}
-{$ELSE}
-  // windows
-  , Windows, Classes,
-  AuxTypes
-{$ENDIF};
+  SysUtils,{$IFNDEF LimitedImplementation} Windows, Classes,{$ENDIF}
+  AuxTypes;
 
 {===============================================================================
     Auxiliary functions
@@ -101,6 +94,16 @@ uses
 }
 Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String; overload;
 Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String; overload;
+
+//------------------------------------------------------------------------------
+
+{$IFNDEF LimitedImplementation}
+{
+  Returns true when both paths (A and B) points to the same file, false
+  otherwise.
+}
+Function SameFile(const A,B: String): Boolean;
+{$ENDIF}
 
 {$IFNDEF LimitedImplementation}
 {===============================================================================
@@ -636,6 +639,27 @@ GetLocaleFormatSettings(LOCALE_USER_DEFAULT,FormatSettings);
 Result := FileSizeToStr(FileSize,FormatSettings,SpaceUnit);
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
+
+//------------------------------------------------------------------------------
+
+{$IFNDEF LimitedImplementation}
+Function SameFile(const A,B: String): Boolean;
+var
+  AInfo,BInfo:  TWinFileInfo;
+begin
+AInfo := TWinFileInfo.Create(A,[lsaLoadBasicInfo]);
+try
+  BInfo := TWinFileInfo.Create(B,[lsaLoadBasicInfo]);
+  try
+    Result := (AInfo.VolumeSerialNumber = BInfo.VolumeSerialNumber) and (AInfo.FileID = BInfo.FileID);
+  finally
+    BInfo.Free;
+  end;
+finally
+  AInfo.Free;
+end;
+end;
+{$ENDIF}
 
 {$IFNDEF LimitedImplementation}
 {-------------------------------------------------------------------------------
