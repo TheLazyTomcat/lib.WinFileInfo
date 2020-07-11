@@ -19,11 +19,12 @@
 
     Although the library is writen only for Windows OS, it can be compiled for
     other systems too. But in such case, it provides only a routine for
-    conversion of file size into a textual representation (with proper units).
+    conversion of file size into a textual representation (with proper units)
+    and SameFile function (this with limited implementation).
 
-  Version 1.0.8 (2020-07-10)
+  Version 1.0.9 (2020-07-11)
 
-  Last change 2020-07-10
+  Last change 2020-07-11
 
   ©2015-2020 František Milt
 
@@ -97,13 +98,12 @@ Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String; ove
 
 //------------------------------------------------------------------------------
 
-{$IFNDEF LimitedImplementation}
 {
-  Returns true when both paths (A and B) points to the same file, false
-  otherwise.
+  In Windows, returns true when both paths (A and B) points to the same file,
+  false otherwise.
+  If Linux, it is only wrapper for SysUtils.SameFileName function.
 }
 Function SameFile(const A,B: String): Boolean;
-{$ENDIF}
 
 {$IFNDEF LimitedImplementation}
 {===============================================================================
@@ -642,9 +642,16 @@ end;
 
 //------------------------------------------------------------------------------
 
-{$IFNDEF LimitedImplementation}
+{$IFDEF LimitedImplementation}
+// non-windows
 Function SameFile(const A,B: String): Boolean;
-var
+begin
+Result := SameFileName(A,B);
+end;
+{$ELSE}
+// windows
+Function SameFile(const A,B: String): Boolean;
+var              
   AInfo,BInfo:  TWinFileInfo;
 begin
 AInfo := TWinFileInfo.Create(A,[lsaLoadBasicInfo]);
