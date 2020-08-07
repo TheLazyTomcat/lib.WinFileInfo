@@ -22,9 +22,9 @@
     conversion of file size into a textual representation (with proper units)
     and SameFile function (this with limited implementation).
 
-  Version 1.0.9 (2020-07-11)
+  Version 1.0.10 (2020-08-07)
 
-  Last change 2020-07-11
+  Last change 2020-08-07
 
   ©2015-2020 František Milt
 
@@ -51,32 +51,27 @@
 ===============================================================================}
 unit WinFileInfo;
 
-{$IF not(Defined(MSWINDOWS) or Defined(WINDOWS))}
+{$IF Defined(WINDOWS) or Defined(MSWINDOWS)}
+  {$UNDEF LimitedImplementation}
+{$ELSEIF Defined(FPC)}
+{
+  On non-Windows systems, a constant DefaultFormatSettings is used to initialize
+  format settings variables.
+  I have no clue whether this constant is present in Delphi in there or not,
+  therefore I have to assume it is not and must limit the allowed OS-compiler
+  combinations.
+}
   {$DEFINE LimitedImplementation}
 {$ELSE}
-  {$UNDEF LimitedImplementation}
+  {$MESSAGE FATAL 'Unsupported OS-compiler combination.'}
 {$IFEND}
 
 {$IFDEF FPC}
-  {
-    Activate symbol BARE_FPC if you want to compile this unit outside of
-    Lazarus.
-    Non-unicode strings are assumed to be ANSI-encoded when defined, otherwise
-    they are assumed to be UTF8-encoded.
-
-    Not defined by default.
-  }
-  {.$DEFINE BARE_FPC}
-  {$MODE ObjFPC}{$H+}
+  {$MODE ObjFPC}
   {$DEFINE FPC_DisableWarns}
   {$MACRO ON}
 {$ENDIF}
-
-{$IF Defined(FPC) and not Defined(Unicode) and (FPC_FULLVERSION < 20701) and not Defined(BARE_FPC)}
-  {$DEFINE UTF8Wrappers}
-{$ELSE}
-  {$UNDEF UTF8Wrappers}
-{$IFEND}
+{$H+}
 
 interface
 
@@ -101,7 +96,7 @@ Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String; ove
 {
   In Windows, returns true when both paths (A and B) points to the same file,
   false otherwise.
-  If Linux, it is only wrapper for SysUtils.SameFileName function.
+  If Linux, it is only a wrapper for SysUtils.SameFileName function.
 }
 Function SameFile(const A,B: String): Boolean;
 
@@ -270,6 +265,7 @@ type
   Following structures are used to hold partially parsed information from
   version information structure.
 }
+
   TWFIVersionInfoStruct_String = record
     Address:    Pointer;
     Size:       TMemSize;
@@ -359,58 +355,46 @@ type
   Loading strategy determines what file information will be loaded and decoded
   or parsed.
   Only one operation cannot be affected by loading strategy and is always
-  performed even when loading strategy indicates no operation - check whether
+  performed even when loading strategy indicates no operation - a check whether
   the file actually exists.
+  If one strategy requires some other strategy to be active, it means this
+  strategy will not produce any result if the required one is not active, it
+  does NOT mean an error will occur.
+
+  lsaLoadBasicInfo
+    load size, times, attributes and other basic info
+
+  lsaDecodeBasicInfo
+    decode attributes and fills size string, requires lsaLoadBasicInfo
+
+  lsaLoadVersionInfo
+    load version info, also loads translations and strings
+
+  lsaParseVersionInfo
+    do low-level parsing of version info data and enumerates keys, requires
+    lsaLoadVersionInfo
+
+  lsaLoadFixedFileInfo
+    load fixed file info, requires lsaLoadVersionInfo
+
+  lsaDecodeFixedFileInfo
+    decode fixed file info if present, has effect only if FFI is present
+    (indicated by (f)VersionInfoFixedFileInfoPresent), requires
+    lsaLoadFixedFileInfo
+
+  lsaVerInfoPredefinedKeys
+    when no key is successfully enumerated (see lsaParseVersionInfo),
+    a predefined set of keys is used, requires lsaParseVersionInfo
+
+  lsaVerInfoExtractTranslations
+    extract translations from parsed version info - might get some translation
+    that normal translation loading (see lsaLoadVersionInfo) missed, requires
+    lsaParseVersionInfo
 }
 type
-  TWFILoadingStrategyAction = (
-  {
-    load size, times, attributes and other basic info
-  }
-    lsaLoadBasicInfo,
-  {
-    decode attributes and set size string
-
-    requires lsaLoadBasicInfo
-  }
-    lsaDecodeBasicInfo,
-  {
-    load version info, also loads translations and strings
-  }
-    lsaLoadVersionInfo,
-  {
-    do low-level parsing of version info data and enumerates keys
-
-    requires lsaLoadVersionInfo
-  }
-    lsaParseVersionInfo,
-  {
-    load fixed file info
-
-    requires lsaLoadVersionInfo
-  }
-    lsaLoadFixedFileInfo,
-  {
-    decode fixed file info if present, has effect only if FFI is present
-    (indicated by (f)VersionInfoFixedFileInfoPresent)
-
-    requires lsaLoadFixedFileInfo
-  }
-    lsaDecodeFixedFileInfo,
-  {
-    when no key is successfully enumerated (see lsaParseVersionInfo),
-    a predefined set of keys is used
-
-    requires lsaParseVersionInfo
-  }
-    lsaVerInfoPredefinedKeys,
-  {
-    extract translations from parsed version info - might get some translation
-    that normal translation loading (see lsaLoadVersionInfo) missed
-
-    requires lsaParseVersionInfo
-  }
-    lsaVerInfoExtractTranslations);
+  TWFILoadingStrategyAction = (lsaLoadBasicInfo,lsaDecodeBasicInfo,lsaLoadVersionInfo,
+                               lsaParseVersionInfo,lsaLoadFixedFileInfo,lsaDecodeFixedFileInfo,
+                               lsaVerInfoPredefinedKeys,lsaVerInfoExtractTranslations);
 
   TWFILoadingStrategy = set of TWFILoadingStrategyAction;
 
@@ -561,7 +545,6 @@ implementation
 
 {$IFNDEF LimitedImplementation}
 uses
-  {$IFDEF UTF8Wrappers}LazFileUtils,{$ENDIF}
   StrRect;
 {$ENDIF LimitedImplementation}
 
@@ -686,17 +669,18 @@ begin
 Result := WStr;
 {$ELSE}
 // non-unicode...
-{$IF Defined(FPC) and not Defined(BARE_FPC)}
-// FPC in Lazarus (String = UTF8String)
-Result := UTF8Encode(WStr)
-{$ELSE}
-// bare FPC or Delphi (String = AnsiString)
-SetLength(Result,WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),nil,0,nil,nil));
-WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),PAnsiChar(Result),Length(Result) * SizeOf(AnsiChar),nil,nil);
-// A wrong codepage might be stored, try translation with default cp
-If (AnsiCodePage <> CP_THREAD_ACP) and (Length(Result) <= 0) and (Length(WStr) > 0) then
-  Result := WideToString(WStr);
-{$IFEND}
+If not UTF8AnsiDefaultStrings then
+  begin
+    // CP ansi strings
+    // bare FPC or Delphi
+    SetLength(Result,WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),nil,0,nil,nil));
+    WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),PAnsiChar(Result),Length(Result) * SizeOf(AnsiChar),nil,nil);
+    // A wrong codepage might be stored, try translation with default cp
+    If (AnsiCodePage <> CP_THREAD_ACP) and (Length(Result) <= 0) and (Length(WStr) > 0) then
+      Result := WideToString(WStr);
+  end
+// UTF8 ansi strings
+else Result := StringToUTF8(WStr);
 {$ENDIF}
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
@@ -1400,15 +1384,11 @@ var
   LastError:  Integer;
 begin
 // set file paths
-{$IFDEF UTF8Wrappers}
-fLongName := ExpandFileNameUTF8(FileName);
-{$ELSE}
-fLongName := ExpandFileName(FileName);
-{$ENDIF}
+fLongName := RTLToStr(ExpandFileName(StrToRTL(FileName)));
 SetLength(fShortName,MAX_PATH);
 SetLength(fShortName,GetShortPathName(PChar(StrToWin(fLongName)),PChar(fShortName),Length(fShortName)));
 fShortName := WinToStr(fShortName);
-// open file and check its existence (with this arguments cannot open directory, so that one is good)
+// open file and check its existence (with this arguments cannot it open a directory, so that one is good)
 fFileHandle := CreateFile(PChar(StrToWin(fLongName)),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
 If fFileHandle <> INVALID_HANDLE_VALUE then
   begin
