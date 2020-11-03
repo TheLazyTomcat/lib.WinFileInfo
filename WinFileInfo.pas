@@ -18,13 +18,12 @@
     info resource.
 
     Although the library is writen only for Windows OS, it can be compiled for
-    other systems too. But in such case, it provides only a routine for
-    conversion of file size into a textual representation (with proper units)
-    and SameFile function (this with limited implementation).
+    other systems too. But in such case, it provides only a very limited
+    implementation.
 
-  Version 1.0.11 (2020-09-09)
+  Version 1.0.12 (2020-11-03)
 
-  Last change 2020-09-09
+  Last change 2020-11-03
 
   ©2015-2020 František Milt
 
@@ -90,6 +89,15 @@ type
 {===============================================================================
     Auxiliary functions
 ===============================================================================}
+
+{
+  Returns size of the given file in bytes.
+  
+  If the file does not exist, it will raise an EWFIFileError exception.
+}
+Function GetFileSize(const FileName: String): UInt64;
+
+//------------------------------------------------------------------------------
 
 {
   FileSizeToStr expects passed number to be a file size and converts it to its
@@ -567,6 +575,39 @@ uses
     Auxiliary functions - public functions
 -------------------------------------------------------------------------------}
 
+Function GetFileSize(const FileName: String): UInt64;
+{$IFDEF LimitedImplementation}  // non-windows
+var
+  iFile:    cInt;
+  FileStat: stat;
+begin
+FileStat := Default(stat);
+iFile := FpOpen(PChar(FileName),O_RDONLY);
+try
+  If iFile >= 0 then
+    begin
+      If FpFStat(iFile,FileStat) = 0 then
+        Result := FileStat.st_size
+      else
+        raise EWFIFileError.CreateFmt('GetFileSize: Failed to obtain stat for file "%s" (%d).',[FileName,errno]);
+    end
+  else raise EWFIFileError.CreateFmt('GetFileSize: Failed to open file "%s" (%d).',[FileName,errno]);
+finally
+  FpClose(iFile);
+end;
+{$ELSE} // windows
+begin
+with TWinFileInfo.Create(FileName,[lsaLoadBasicInfo]) do
+try
+  Result := Size;
+finally
+  Free;
+end;
+{$ENDIF}
+end;
+
+//------------------------------------------------------------------------------
+
 Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String;
 const
   BinaryPrefix: array[0..8] of String = ('','Ki','Mi','Gi','Ti','Pi','Ei','Zi','Yi');
@@ -623,18 +664,14 @@ end;
 
 //------------------------------------------------------------------------------
 
-{$IFDEF LimitedImplementation}
-
-// non-windows
 Function SameFile(const A,B: String): Boolean;
+{$IFDEF LimitedImplementation}  // non-windows
 var
   FileA,FileB:  cInt;
   StatA,StatB:  stat;
 begin
-{$IFDEF FPC}
 StatA := Default(stat);
 StatB := Default(stat);
-{$ENDIF}
 FileA := FpOpen(PChar(A),O_RDONLY);
 try
   If FileA >= 0 then
@@ -664,11 +701,7 @@ finally
   FpClose(FileA);
 end;
 end;
-
-{$ELSE}
-
-// windows
-Function SameFile(const A,B: String): Boolean;
+{$ELSE} // windows
 var              
   AInfo,BInfo:  TWinFileInfo;
 begin
@@ -692,7 +725,6 @@ finally
   AInfo.Free;
 end;
 end;
-
 {$ENDIF}
 
 {$IFNDEF LimitedImplementation}
