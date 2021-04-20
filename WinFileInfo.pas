@@ -18,13 +18,12 @@
     info resource.
 
     Although the library is writen only for Windows OS, it can be compiled for
-    other systems too. But in such case, it provides only a routine for
-    conversion of file size into a textual representation (with proper units)
-    and SameFile function (this with limited implementation).
+    other systems too. But in such case, it provides only a very limited
+    implementation.
 
-  Version 1.0.10 (2020-08-07)
+  Version 1.0.12 (2020-11-03)
 
-  Last change 2020-08-07
+  Last change 2020-11-03
 
   ©2015-2020 František Milt
 
@@ -55,11 +54,8 @@ unit WinFileInfo;
   {$UNDEF LimitedImplementation}
 {$ELSEIF Defined(FPC)}
 {
-  On non-Windows systems, a constant DefaultFormatSettings is used to initialize
-  format settings variables.
-  I have no clue whether this constant is present in Delphi in there or not,
-  therefore I have to assume it is not and must limit the allowed OS-compiler
-  combinations.
+  There is FPC-specific code used in non-Windows systems, therefore compilation
+  for these systems has to be allowed only on FPC.
 }
   {$DEFINE LimitedImplementation}
 {$ELSE}
@@ -80,8 +76,28 @@ uses
   AuxTypes;
 
 {===============================================================================
+    Library specific exception
+===============================================================================}
+
+type
+  EWFIException = class(Exception);
+
+  EWFIFileError        = class(EWFIException);
+  EWFISystemError      = class(EWFIException);
+  EWFIIndexOutOfBounds = class(EWFIException);
+
+{===============================================================================
     Auxiliary functions
 ===============================================================================}
+
+{
+  Returns size of the given file in bytes.
+  
+  If the file does not exist, it will raise an EWFIFileError exception.
+}
+Function GetFileSize(const FileName: String): UInt64;
+
+//------------------------------------------------------------------------------
 
 {
   FileSizeToStr expects passed number to be a file size and converts it to its
@@ -94,9 +110,11 @@ Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String; ove
 //------------------------------------------------------------------------------
 
 {
-  In Windows, returns true when both paths (A and B) points to the same file,
-  false otherwise.
-  If Linux, it is only a wrapper for SysUtils.SameFileName function.
+  Returns true when both paths (A and B) points to the same file, false
+  otherwise.
+  If either of the two paths points to a file that does not exist (or, in linux,
+  obtaining file information fails), the function will raise an EWFIFileError
+  exception.
 }
 Function SameFile(const A,B: String): Boolean;
 
@@ -106,16 +124,6 @@ Function SameFile(const A,B: String): Boolean;
                                   TWinFileInfo
 --------------------------------------------------------------------------------
 ===============================================================================}
-{===============================================================================
-    TWinFileInfo - library specific exception
-===============================================================================}
-
-type
-  EWFIException = class(Exception);
-
-  EWFISystemError      = class(EWFIException);
-  EWFIIndexOutOfBounds = class(EWFIException);
-
 {===============================================================================
     TWinFileInfo - system constants
 ===============================================================================}
@@ -543,10 +551,8 @@ type
 
 implementation
 
-{$IFNDEF LimitedImplementation}
 uses
-  StrRect;
-{$ENDIF LimitedImplementation}
+  {$IFDEF LimitedImplementation}BaseUnix{$ELSE}StrRect{$ENDIF};
 
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
@@ -568,6 +574,39 @@ uses
 {-------------------------------------------------------------------------------
     Auxiliary functions - public functions
 -------------------------------------------------------------------------------}
+
+Function GetFileSize(const FileName: String): UInt64;
+{$IFDEF LimitedImplementation}  // non-windows
+var
+  iFile:    cInt;
+  FileStat: stat;
+begin
+FileStat := Default(stat);
+iFile := FpOpen(PChar(FileName),O_RDONLY);
+try
+  If iFile >= 0 then
+    begin
+      If FpFStat(iFile,FileStat) = 0 then
+        Result := FileStat.st_size
+      else
+        raise EWFIFileError.CreateFmt('GetFileSize: Failed to obtain stat for file "%s" (%d).',[FileName,errno]);
+    end
+  else raise EWFIFileError.CreateFmt('GetFileSize: Failed to open file "%s" (%d).',[FileName,errno]);
+finally
+  FpClose(iFile);
+end;
+{$ELSE} // windows
+begin
+with TWinFileInfo.Create(FileName,[lsaLoadBasicInfo]) do
+try
+  Result := Size;
+finally
+  Free;
+end;
+{$ENDIF}
+end;
+
+//------------------------------------------------------------------------------
 
 Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String;
 const
@@ -625,26 +664,63 @@ end;
 
 //------------------------------------------------------------------------------
 
-{$IFDEF LimitedImplementation}
-// non-windows
 Function SameFile(const A,B: String): Boolean;
+{$IFDEF LimitedImplementation}  // non-windows
+var
+  FileA,FileB:  cInt;
+  StatA,StatB:  stat;
 begin
-Result := SameFileName(A,B);
+StatA := Default(stat);
+StatB := Default(stat);
+FileA := FpOpen(PChar(A),O_RDONLY);
+try
+  If FileA >= 0 then
+    begin
+      FileB := FpOpen(PChar(B),O_RDONLY);
+      try
+        If FileB >= 0 then
+          begin
+            If FpFStat(FileA,StatA) = 0 then
+              begin
+                If FpFStat(FileB,StatB) = 0 then
+                  begin
+                    Result := (StatA.st_dev = StatB.st_dev) and
+                              (StatA.st_ino = StatB.st_ino);
+                  end
+                else raise EWFIFileError.CreateFmt('SameFile: Failed to obtain stat for file "%s" (%d).',[B,errno]);
+              end
+            else raise EWFIFileError.CreateFmt('SameFile: Failed to obtain stat for file "%s" (%d).',[A,errno]);
+          end
+        else raise EWFIFileError.CreateFmt('SameFile: Failed to open file "%s" (%d).',[B,errno]);
+      finally
+        FpClose(FileB);
+      end;
+    end
+  else raise EWFIFileError.CreateFmt('SameFile: Failed to open file "%s" (%d).',[A,errno]);
+finally
+  FpClose(FileA);
 end;
-{$ELSE}
-// windows
-Function SameFile(const A,B: String): Boolean;
+end;
+{$ELSE} // windows
 var              
   AInfo,BInfo:  TWinFileInfo;
 begin
+Result := False;
 AInfo := TWinFileInfo.Create(A,[lsaLoadBasicInfo]);
 try
-  BInfo := TWinFileInfo.Create(B,[lsaLoadBasicInfo]);
-  try
-    Result := (AInfo.VolumeSerialNumber = BInfo.VolumeSerialNumber) and (AInfo.FileID = BInfo.FileID);
-  finally
-    BInfo.Free;
-  end;
+  If AInfo.Exists then
+    begin
+      BInfo := TWinFileInfo.Create(B,[lsaLoadBasicInfo]);
+      try
+        If BInfo.Exists then
+          Result := (AInfo.VolumeSerialNumber = BInfo.VolumeSerialNumber) and (AInfo.FileID = BInfo.FileID)
+        else
+          raise EWFIFileError.CreateFmt('SameFile: File "%s" does not exist.',[B]);
+      finally
+        BInfo.Free;
+      end;
+    end
+  else raise EWFIFileError.CreateFmt('SameFile: File "%s" does not exist.',[A]);
 finally
   AInfo.Free;
 end;
