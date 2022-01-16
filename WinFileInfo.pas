@@ -52,11 +52,13 @@ unit WinFileInfo;
 
 {$IF Defined(WINDOWS) or Defined(MSWINDOWS)}
   {$UNDEF LimitedImplementation}
-{$ELSEIF Defined(FPC)}
+  {$DEFINE Windows}
+{$ELSEIF Defined(LINUX) and Defined(FPC)}
 {
   There is FPC-specific code used in non-Windows systems, therefore compilation
   for these systems has to be allowed only on FPC.
 }
+  {$DEFINE Linux}
   {$DEFINE LimitedImplementation}
 {$ELSE}
   {$MESSAGE FATAL 'Unsupported OS-compiler combination.'}
@@ -87,7 +89,7 @@ type
   EWFIIndexOutOfBounds = class(EWFIException);
 
 {===============================================================================
-    Auxiliary functions
+    Utility functions
 ===============================================================================}
 
 {
@@ -103,9 +105,15 @@ Function GetFileSize(const FileName: String): UInt64;
   FileSizeToStr expects passed number to be a file size and converts it to its
   string representation (as a decimal number if needed), including proper unit
   (KiB, MiB, ...).
+
+    NOTE - version without FormatSettings parameter is not thread safe, use
+           FileSizeToStrThr in non-main thread(s) if you cannot provide filled
+           format settings (it uses default settings provided by OS or RLT).
 }
 Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String; overload;
 Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String; overload;
+
+Function FileSizeToStrThr(FileSize: UInt64; SpaceUnit: Boolean = True): String;
 
 //------------------------------------------------------------------------------
 
@@ -237,7 +245,7 @@ type
   Group of structures used to store decoded information from fixed file info
   part of version information resource.
 }
-
+type
   TWFIFixedFileInfo_VersionMembers = record
     Major:    UInt16;
     Minor:    UInt16;
@@ -273,7 +281,7 @@ type
   Following structures are used to hold partially parsed information from
   version information structure.
 }
-
+type
   TWFIVersionInfoStruct_String = record
     Address:    Pointer;
     Size:       TMemSize;
@@ -336,7 +344,7 @@ type
   Following structures are used to store fully parsed information from version
   information structure.
 }
-
+type
   TWFITranslationItem = record
     LanguageName: String;
     LanguageStr:  String;
@@ -431,6 +439,7 @@ type
     fLoadingStrategy:         TWFILoadingStrategy;
     fFormatSettings:          TFormatSettings;
     // basic initial file info
+    fName:                    String;
     fLongName:                String;
     fShortName:               String;
     fExists:                  Boolean;
@@ -506,7 +515,7 @@ type
     property LoadingStrategy: TWFILoadingStrategy read fLoadingStrategy write fLoadingStrategy;
     property FormatSettings: TFormatSettings read fFormatSettings write fFormatSettings;
     // basic initial file info
-    property Name: String read fLongName;
+    property Name: String read fName;
     property LongName: String read fLongName;
     property ShortName: String read fShortName;
     property Exists: Boolean read fExists;
@@ -569,10 +578,98 @@ uses
 {$ENDIF}
 
 {===============================================================================
-    Auxiliary functions
+    Utility functions
 ===============================================================================}
 {-------------------------------------------------------------------------------
-    Auxiliary functions - public functions
+    Utility functions - internal functions
+-------------------------------------------------------------------------------}
+
+procedure ProcessFileSize(FileSize: UInt64; out Number: Double; out Decimals: Integer; out UnitPrefix: String);
+{
+  This routine takes size of a file in bytes and produces floating-point number
+  that can be used in textual representation of this size. Depending on a
+  "magnitude" of the size, a unit prefix is selected and number of decimal
+  digits to show is calculated. Also, the number is properly divided for the
+  selected unit prefix.
+}
+const
+  BinaryPrefix: array[0..8] of String = ('','Ki','Mi','Gi','Ti','Pi','Ei','Zi','Yi');
+  PrefixShift = 10;
+var
+  Magnitude:  Integer;
+begin
+Magnitude := -1;
+repeat
+  Inc(Magnitude);
+until ((FileSize shr (PrefixShift * Succ(Magnitude))) = 0) or (Magnitude >= 8);
+case FileSize shr (PrefixShift * Magnitude) of
+   1..9:  Decimals := 2;
+  10..99: Decimals := 1;
+else
+  Decimals := 0;
+end;
+Number := (FileSize shr (PrefixShift * Magnitude));
+If Magnitude > 0 then
+  Number := Number + (((FileSize shr (PrefixShift * Pred(Magnitude))) and 1023) / 1024)
+else
+  Decimals := 0;
+UnitPrefix := BinaryPrefix[Magnitude];
+end;
+
+//------------------------------------------------------------------------------
+
+procedure InitFormatSettings(out FormatSettings: TFormatSettings);
+begin
+{$WARN SYMBOL_PLATFORM OFF}
+{$IF not Defined(FPC) and (CompilerVersion >= 18)} // Delphi 2006+
+FormatSettings := TFormatSettings.Create(LOCALE_USER_DEFAULT);
+{$ELSE}
+{$IFDEF Windows}
+GetLocaleFormatSettings(LOCALE_USER_DEFAULT,FormatSettings);
+{$ELSE}
+// non-windows
+FormatSettings := DefaultFormatSettings;
+{$ENDIF}
+{$IFEND}
+{$WARN SYMBOL_PLATFORM ON}
+end;
+
+{$IFDEF Windows}
+//------------------------------------------------------------------------------
+
+{$IF not Declared(CP_THREAD_ACP)}
+const
+  CP_THREAD_ACP = 3;
+{$IFEND}
+
+{$IFDEF FPCDWM}{$PUSH}W5024{$ENDIF}
+Function WideToString(const WStr: WideString; AnsiCodePage: UINT = CP_THREAD_ACP): String;
+begin
+{$IFDEF Unicode}
+// unicode Delphi or FPC (String = UnicodeString)
+Result := WStr;
+{$ELSE}
+// non-unicode...
+If not UTF8AnsiDefaultStrings then
+  begin
+    // CP ansi strings
+    // bare FPC or Delphi
+    SetLength(Result,WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),nil,0,nil,nil));
+    WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),PAnsiChar(Result),Length(Result) * SizeOf(AnsiChar),nil,nil);
+    // A wrong codepage might be stored, try translation with default cp
+    If (AnsiCodePage <> CP_THREAD_ACP) and (Length(Result) <= 0) and (Length(WStr) > 0) then
+      Result := WideToString(WStr);
+  end
+// UTF8 ansi strings
+else Result := StringToUTF8(WStr);
+{$ENDIF}
+end;
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
+
+{$ENDIF}
+
+{-------------------------------------------------------------------------------
+    Utility functions - public functions
 -------------------------------------------------------------------------------}
 
 Function GetFileSize(const FileName: String): UInt64;
@@ -609,58 +706,42 @@ end;
 //------------------------------------------------------------------------------
 
 Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String;
-const
-  BinaryPrefix: array[0..8] of String = ('','Ki','Mi','Gi','Ti','Pi','Ei','Zi','Yi');
-  PrefixShift = 10;
 var
-  Offset: Integer;  
-  Deci:   Integer;  // number of shown decimal places
-  Num:    Double;
+  Number:     Double;
+  Decimals:   Integer;
+  UnitPrefix: String;
 begin
-Offset := -1;
-repeat
-  Inc(Offset);
-until ((FileSize shr (PrefixShift * Succ(Offset))) = 0) or (Offset >= 8);
-case FileSize shr (PrefixShift * Offset) of
-   1..9:  Deci := 2;
-  10..99: Deci := 1;
-else
-  Deci := 0;
-end;
-Num := (FileSize shr (PrefixShift * Offset));
-If Offset > 0 then
-  Num := Num + (((FileSize shr (PrefixShift * Pred(Offset))) and 1023) / 1024)
-else
-  Deci := 0;
+ProcessFileSize(FileSize,Number,Decimals,UnitPrefix);
 If SpaceUnit then
-  Result := Format('%.*f %sB',[Deci,Num,BinaryPrefix[Offset]],FormatSettings)
+  Result := Format('%.*f %sB',[Decimals,Number,UnitPrefix],FormatSettings)
 else
-  Result := Format('%.*f%sB',[Deci,Num,BinaryPrefix[Offset]],FormatSettings)
+  Result := Format('%.*f%sB',[Decimals,Number,UnitPrefix],FormatSettings);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-{$IFDEF FPCDWM}{$PUSH}W5057 W5091{$ENDIF}
 Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String;
+var
+  Number:     Double;
+  Decimals:   Integer;
+  UnitPrefix: String;
+begin
+ProcessFileSize(FileSize,Number,Decimals,UnitPrefix);
+If SpaceUnit then
+  Result := Format('%.*f %sB',[Decimals,Number,UnitPrefix])
+else
+  Result := Format('%.*f%sB',[Decimals,Number,UnitPrefix]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function FileSizeToStrThr(FileSize: UInt64; SpaceUnit: Boolean = True): String;
 var
   FormatSettings: TFormatSettings;
 begin
-{$WARN SYMBOL_PLATFORM OFF}
-{$IF not Defined(FPC) and (CompilerVersion >= 18)} // Delphi 2006+
-FormatSettings := TFormatSettings.Create(LOCALE_USER_DEFAULT);
-{$ELSE}
-{$IFDEF LimitedImplementation}
-// non-windows
-FormatSettings := DefaultFormatSettings;
-{$ELSE}
-// windows
-GetLocaleFormatSettings(LOCALE_USER_DEFAULT,FormatSettings);
-{$ENDIF}
-{$IFEND}
-{$WARN SYMBOL_PLATFORM ON}
+InitFormatSettings(FormatSettings);
 Result := FileSizeToStr(FileSize,FormatSettings,SpaceUnit);
 end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
 
 //------------------------------------------------------------------------------
 
@@ -728,39 +809,6 @@ end;
 {$ENDIF}
 
 {$IFNDEF LimitedImplementation}
-{-------------------------------------------------------------------------------
-    Auxiliary functions - local functions
--------------------------------------------------------------------------------}
-
-{$IF not Declared(CP_THREAD_ACP)}
-const
-  CP_THREAD_ACP = 3;
-{$IFEND}
-
-{$IFDEF FPCDWM}{$PUSH}W5024{$ENDIF}
-Function WideToString(const WStr: WideString; AnsiCodePage: UINT = CP_THREAD_ACP): String;
-begin
-{$IFDEF Unicode}
-// unicode Delphi or FPC (String = UnicodeString)
-Result := WStr;
-{$ELSE}
-// non-unicode...
-If not UTF8AnsiDefaultStrings then
-  begin
-    // CP ansi strings
-    // bare FPC or Delphi
-    SetLength(Result,WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),nil,0,nil,nil));
-    WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),PAnsiChar(Result),Length(Result) * SizeOf(AnsiChar),nil,nil);
-    // A wrong codepage might be stored, try translation with default cp
-    If (AnsiCodePage <> CP_THREAD_ACP) and (Length(Result) <= 0) and (Length(WStr) > 0) then
-      Result := WideToString(WStr);
-  end
-// UTF8 ansi strings
-else Result := StringToUTF8(WStr);
-{$ENDIF}
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
 {===============================================================================
 --------------------------------------------------------------------------------
                                   TWinFileInfo
@@ -1460,11 +1508,12 @@ var
   LastError:  Integer;
 begin
 // set file paths
+fName := FileName;
 fLongName := RTLToStr(ExpandFileName(StrToRTL(FileName)));
 SetLength(fShortName,MAX_PATH);
 SetLength(fShortName,GetShortPathName(PChar(StrToWin(fLongName)),PChar(fShortName),Length(fShortName)));
 fShortName := WinToStr(fShortName);
-// open file and check its existence (with this arguments cannot it open a directory, so that one is good)
+// open file and check its existence (with this arguments it cannot open a directory, so that one is good)
 fFileHandle := CreateFile(PChar(StrToWin(fLongName)),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
 If fFileHandle <> INVALID_HANDLE_VALUE then
   begin
