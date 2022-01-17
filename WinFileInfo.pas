@@ -11,19 +11,19 @@
 
     Main aim of this library is to provide a simple way of obtaining file
     information such as size, attributes, time of creation and, in case of
-    binaries, a version information.
+    binaries on Windows OS, a version information.
 
     A complete parsing of raw version information data is implemented, so
     it is possible to obtain information even from badly constructed version
     info resource.
 
-    Although the library is writen only for Windows OS, it can be compiled for
-    other systems too. But in such case, it provides only a very limited
-    implementation.
+    Although the library was intended only for Windows OS, it can now be
+    compiled for other systems too. But in such case, it provides only a
+    limited file information set.
 
-  Version 1.1 (2022-01-17)
+  Version 1.1 (2022-01-18)
 
-  Last change 2022-01-17
+  Last change 2022-01-18
 
   ©2015-2022 František Milt
 
@@ -49,7 +49,7 @@
 
 ===============================================================================}
 unit WinFileInfo;
-{$message 'rewrite notes^^'}
+
 {$IF Defined(WINDOWS) or Defined(MSWINDOWS)}
   {$DEFINE Windows}
 {$ELSEIF Defined(LINUX) and Defined(FPC)}
@@ -84,7 +84,7 @@ type
   EWFIFileError        = class(EWFIException);
   EWFIProcessingError  = class(EWFIException);
   EWFISystemError      = class(EWFIException);
-  EWFIIndexOutOfBounds = class(EWFIException);  // windows only
+  EWFIIndexOutOfBounds = class(EWFIException);  // used only in windows
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -374,7 +374,7 @@ type
   permissions.
 }
 type
-  TWFIFileType = (ftFIFO,ftCharacterDevice,ftDirectory,ftBlockDevice,
+  TWFIFileType = (ftUnknown,ftFIFO,ftCharacterDevice,ftDirectory,ftBlockDevice,
                   ftRegularFile,ftSymbolicLink,ftSocket);
 
   TWFIFilePermission = (fpUserRead,fpUserWrite,fpUserExecute,
@@ -514,6 +514,11 @@ type
     fOwnerUserID:             UInt32;
     fOwnerGroupID:            UInt32;
     fMode:                    UInt32;
+    // decoded mode
+    fFileType:                TWFIFileType;
+    fFileTypeStr:             String;
+    fPermissions:             TWFIFilePermissions;
+    fPermissionsStr:          String;
   {$ENDIF}
   {$IFDEF Windows}
     // version info unparsed data
@@ -615,6 +620,11 @@ type
     property OwnerUserID: UInt32 read fOwnerUserID;
     property OwnerGroupID: UInt32 read fOwnerGroupID;
     property Mode: UInt32 read fMode;
+    // decoded mode
+    property FileType: TWFIFileType read fFileType;
+    property FileTypeStr: String read fFileTypeStr;
+    property Permissions: TWFIFilePermissions read fPermissions;
+    property PermissionsStr: String read fPermissionsStr;
   {$ENDIF}
   {$IFDEF Windows}
     // version info unparsed data
@@ -648,13 +658,11 @@ uses
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
   {$DEFINE W4055:={$WARN 4055 OFF}}   // Conversion between ordinals and pointers is not portable
-  //{$DEFINE W5024:={$WARN 5024 OFF}}   // Parameter "$1" not used
   {$DEFINE W5057:={$WARN 5057 OFF}}   // Local variable "$1" does not seem to be initialized
   {$PUSH}{$WARN 2005 OFF}             // Comment level $1 found
   {$IF Defined(FPC) and (FPC_FULLVERSION >= 30000)}
     {$DEFINE W5058:=}
     {$DEFINE W5092:={$WARN 5092 OFF}}   // Variable "$1" of a managed type does not seem to be initialized
-    //{$DEFINE W5091:={$WARN 5091 OFF}} // Local variable "$1" of a managed type does not seem to be initialized
   {$ELSE}
     {$DEFINE W5058:={$WARN 5058 OFF}}   // Variable "$1" does not seem to be initialized
     {$DEFINE W5092:=}
@@ -852,22 +860,16 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 {===============================================================================
-    TWinFileInfo - external functions
-===============================================================================}
-
-{$IFDEF Windows}
-{$IF not Declared(GetFileSizeEx)}
-Function GetFileSizeEx(hFile: THandle; lpFileSize: PUInt64): BOOL; stdcall; external 'kernel32.dll';
-{$IFEND}
-{$ENDIF}
-
-{===============================================================================
     TWinFileInfo - system constants
 ===============================================================================}
 {$IFNDEF Windows}
 const
   O_NOATIME = $40000;   // do not set atime
   O_PATH	  = $200000;  // resolve pathname but do not open file
+
+  S_ISUID = $800; // set-user-ID bit
+  S_ISGID = $400; // set-group-ID bit
+  S_ISVTX = $200; // sticky bit
 {$ENDIF}
 
 {===============================================================================
@@ -973,6 +975,18 @@ const
     'ProductVersion','PrivateBuild','SpecialBuild');
 
 {$ELSE}//-----------------------------------------------------------------------
+const
+  WFI_FILE_TYPE_STRS: array[TWFIFileType] of String = (
+    'unknown','named pipe','character device','directory','block device',
+    'regular file','symbolic link','socket');
+
+//------------------------------------------------------------------------------
+
+  WFI_PERMISSION_FLAGS: array[TWFIFilePermission] of UInt32 = (
+    S_IRUSR,S_IWUSR,S_IXUSR,  // user
+    S_IRGRP,S_IWGRP,S_IXGRP,  // group
+    S_IROTH,S_IWOTH,S_IXOTH,  // others
+    S_ISUID,S_ISGID,S_ISVTX);
 
 {$ENDIF}
 
@@ -1441,10 +1455,70 @@ fAttributesDecoded.Temporary         := ProcessAttribute(FILE_ATTRIBUTE_TEMPORAR
 fAttributesDecoded.Virtual           := ProcessAttribute(FILE_ATTRIBUTE_VIRTUAL);
 end;
 {$ELSE}
+
+  procedure AddToString(var Str: String; const Addend: String);
+  begin
+    If Length(Addend) > 0 then
+      begin
+        If Length(Str) > 0 then
+          Str := Str + ' ' + Addend
+        else
+          Str := Addend;
+      end;
+  end;
+
+  Function GetRWXStr(CheckedPerms: array of TWFIFilePermission; const Prefix: String): String;
+  begin
+    Result := '';
+    If Length(CheckedPerms) >= 3 then
+      begin
+        If CheckedPerms[0] in fPermissions then
+          Result := Result + 'R';
+        If CheckedPerms[1] in fPermissions then
+          Result := Result + 'W';
+        If CheckedPerms[2] in fPermissions then
+          Result := Result + 'X';
+      end;
+    If Length(Result) > 0 then
+      Result := Prefix + Result;
+  end;
+
+var
+  i:  TWFIFilePermission;
 begin
 fSizeStr := FileSizeToStr(fSize,fFormatSettings);
-// decode mode
-{$message 'implement'}
+// decode mode... file type
+case (fMode and S_IFMT) of
+  S_IFIFO:  fFileType := ftFIFO;
+  S_IFCHR:  fFileType := ftCharacterDevice;
+  S_IFDIR:  fFileType := ftDirectory;
+  S_IFBLK:  fFileType := ftBlockDevice;
+  S_IFREG:  fFileType := ftRegularFile;
+  S_IFLNK:  fFileType := ftSymbolicLink;
+  S_IFSOCK: fFileType := ftSocket;
+else
+  fFileType := ftUnknown;
+end;
+fFileTypeStr := WFI_FILE_TYPE_STRS[fFileType];
+// file permissions
+fPermissions := [];
+For i := Low(TWFIFilePermission) to High(TWFIFilePermission) do
+  If fMode and WFI_PERMISSION_FLAGS[i] <> 0 then
+    Include(fPermissions,i);
+// permissions to text
+fPermissionsStr := '';
+If (fPermissions * [fpUserRead,fpUserWrite,fpUserExecute]) <> [] then
+  AddToString(fPermissionsStr,GetRWXStr([fpUserRead,fpUserWrite,fpUserExecute],'U-'));
+If (fPermissions * [fpGroupRead,fpGroupWrite,fpGroupExecute]) <> [] then
+  AddToString(fPermissionsStr,GetRWXStr([fpGroupRead,fpGroupWrite,fpGroupExecute],'G-'));
+If (fPermissions * [fpOthersRead,fpOthersWrite,fpOthersExecute]) <> [] then
+  AddToString(fPermissionsStr,GetRWXStr([fpOthersRead,fpOthersWrite,fpOthersExecute],'O-'));
+If fpSetUserID in fPermissions then
+  AddToString(fPermissionsStr,'SUID');
+If fpSetGroupID in fPermissions then
+  AddToString(fPermissionsStr,'SGID');
+If fpSticky in fPermissions then
+  AddToString(fPermissionsStr,'STCK');
 end;
 {$ENDIF}
 
@@ -1635,6 +1709,11 @@ fBlocks := 0;
 fOwnerUserID := 0;
 fOwnerGroupID := 0;
 fMode := 0;
+// decoded mode
+fFileType := ftUnknown;
+fFileTypeStr := '';
+fPermissions := [];
+fPermissionsStr := '';
 {$ENDIF}
 end;
 
@@ -1780,8 +1859,8 @@ var
   Len:  Integer;
 {$ENDIF}
 begin
-{$IFDEF Windows}
 Strings.Add('=== TWinInfoFile report, created on ' + DateTimeToStr(Now,fFormatSettings) + ' ===');
+{$IFDEF Windows}
 Strings.Add(sLineBreak + '--- General info ---' + sLineBreak);
 Strings.Add('  Exists:     ' + BoolToStr(fExists,True));
 Strings.Add('  Long name:  ' + LongName);
@@ -1901,7 +1980,42 @@ If fVersionInfoPresent then
   end
 else Strings.Add(sLineBreak + 'File version information not present.');
 {$ELSE}
-Strings.Clear;
+Strings.Add(sLineBreak + '--- General info ---' + sLineBreak);
+Strings.Add('  Exists:     ' + BoolToStr(fExists,True));
+Strings.Add('  Long name:  ' + LongName);
+Strings.Add(sLineBreak + 'Size:' + sLineBreak);
+Strings.Add('  Size:    ' + IntToStr(fSize));
+Strings.Add('  SizeStr: ' + SizeStr);
+Strings.Add(sLineBreak + 'Time:' + sLineBreak);
+Strings.Add(Format('  Last access:        %s (%s)',[DateTimeToStr(fLastAccessTime),DateTimeToStr(fLastAccessTimeRaw)]));
+Strings.Add(Format('  Last modification:  %s (%s)',[DateTimeToStr(fLastModificationTime),DateTimeToStr(fLastModificationTimeRaw)]));
+Strings.Add(Format('  Last status change: %s (%s)',[DateTimeToStr(fLastStatusChangeTime),DateTimeToStr(fLastStatusChangeTimeRaw)]));
+Strings.Add(sLineBreak + 'Others:' + sLineBreak);
+Strings.Add('  Number of hard links: ' + IntToStr(fNumberOfHardLinks));
+Strings.Add('  Device ID:            ' + IntToStr(fDeviceID));
+Strings.Add('  iNode number:         ' + IntToStr(fiNodeNumber));
+Strings.Add('  Block Size:           ' + IntToStr(fBlockSize));
+Strings.Add('  Block count:          ' + IntToStr(fBlocks));
+Strings.Add('  Owner user ID:        ' + IntToStr(fOwnerUserID));
+Strings.Add('  Owner group ID:       ' + IntToStr(fOwnerGroupID));
+Strings.Add('  File mode:            ' + IntToHex(fMode,8));
+Strings.Add(sLineBreak + 'File type:' + sLineBreak);
+Strings.Add('  File type:        ' + IntToStr(Ord(fFileType)));
+Strings.Add('  File type string: ' + fFileTypeStr);
+Strings.Add(sLineBreak + 'Permissions:' + sLineBreak);
+Strings.Add('  User can read:      ' + BoolToStr(fpUserRead in fPermissions,True));
+Strings.Add('  User can write:     ' + BoolToStr(fpUserWrite in fPermissions,True));
+Strings.Add('  User can execute:   ' + BoolToStr(fpUserExecute in fPermissions,True));
+Strings.Add('  Group can read:     ' + BoolToStr(fpGroupRead in fPermissions,True));
+Strings.Add('  Group can write:    ' + BoolToStr(fpGroupWrite in fPermissions,True));
+Strings.Add('  Group can execute:  ' + BoolToStr(fpGroupExecute in fPermissions,True));
+Strings.Add('  Others can read:    ' + BoolToStr(fpOthersRead in fPermissions,True));
+Strings.Add('  Others can write:   ' + BoolToStr(fpOthersWrite in fPermissions,True));
+Strings.Add('  Others can execute: ' + BoolToStr(fpOthersExecute in fPermissions,True));
+Strings.Add('  Set user ID:        ' + BoolToStr(fpSetUserID in fPermissions,True));
+Strings.Add('  Set group ID:       ' + BoolToStr(fpSetGroupID in fPermissions,True));
+Strings.Add('  Sticky bit:         ' + BoolToStr(fpSticky in fPermissions,True));
+Strings.Add(sLineBreak + '  File permissions string: ' + fPermissionsStr);
 {$ENDIF}
 end;
 
