@@ -11,21 +11,21 @@
 
     Main aim of this library is to provide a simple way of obtaining file
     information such as size, attributes, time of creation and, in case of
-    binaries, a version information.
+    binaries on Windows OS, a version information.
 
     A complete parsing of raw version information data is implemented, so
     it is possible to obtain information even from badly constructed version
     info resource.
 
-    Although the library is writen only for Windows OS, it can be compiled for
-    other systems too. But in such case, it provides only a very limited
-    implementation.
+    Although the library was intended only for Windows OS, it can now be
+    compiled for other systems too. But in such case, it provides only a
+    limited file information set.
 
-  Version 1.0.12 (2020-11-03)
+  Version 1.1 (2022-01-18)
 
-  Last change 2020-11-03
+  Last change 2022-01-18
 
-  ©2015-2020 František Milt
+  ©2015-2022 František Milt
 
   Contacts:
     František Milt: frantisek.milt@gmail.com
@@ -45,19 +45,19 @@
     AuxTypes - github.com/TheLazyTomcat/Lib.AuxTypes
   * StrRect  - github.com/TheLazyTomcat/Lib.StrRect
 
-    StrRect is currently required only when compiled for Windows OS.
+    StrRect is required only when compiling for Windows OS.
 
 ===============================================================================}
 unit WinFileInfo;
 
 {$IF Defined(WINDOWS) or Defined(MSWINDOWS)}
-  {$UNDEF LimitedImplementation}
-{$ELSEIF Defined(FPC)}
+  {$DEFINE Windows}
+{$ELSEIF Defined(LINUX) and Defined(FPC)}
 {
   There is FPC-specific code used in non-Windows systems, therefore compilation
   for these systems has to be allowed only on FPC.
 }
-  {$DEFINE LimitedImplementation}
+  {$DEFINE Linux}
 {$ELSE}
   {$MESSAGE FATAL 'Unsupported OS-compiler combination.'}
 {$IFEND}
@@ -72,24 +72,28 @@ unit WinFileInfo;
 interface
 
 uses
-  SysUtils,{$IFNDEF LimitedImplementation} Windows, Classes,{$ENDIF}
+  SysUtils, Classes, {$IFDEF Windows}Windows,{$ELSE}UnixType,{$ENDIF}
   AuxTypes;
 
 {===============================================================================
-    Library specific exception
+    Library-specific exceptions
 ===============================================================================}
-
 type
   EWFIException = class(Exception);
 
   EWFIFileError        = class(EWFIException);
+  EWFIProcessingError  = class(EWFIException);
   EWFISystemError      = class(EWFIException);
-  EWFIIndexOutOfBounds = class(EWFIException);
+  EWFIIndexOutOfBounds = class(EWFIException);  // used only in windows
 
 {===============================================================================
-    Auxiliary functions
+--------------------------------------------------------------------------------
+                                Utility functions
+--------------------------------------------------------------------------------
 ===============================================================================}
-
+{===============================================================================
+    Utility functions - declaration
+===============================================================================}
 {
   Returns size of the given file in bytes.
   
@@ -98,35 +102,41 @@ type
 Function GetFileSize(const FileName: String): UInt64;
 
 //------------------------------------------------------------------------------
-
 {
   FileSizeToStr expects passed number to be a file size and converts it to its
   string representation (as a decimal number if needed), including proper unit
   (KiB, MiB, ...).
+
+    NOTE - version without FormatSettings parameter is not thread safe, use
+           FileSizeToStrThr in non-main thread(s) if you cannot provide filled
+           format settings (it uses default settings provided by OS or RLT).
 }
 Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String; overload;
 Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String; overload;
 
-//------------------------------------------------------------------------------
+Function FileSizeToStrThr(FileSize: UInt64; SpaceUnit: Boolean = True): String;
 
+//------------------------------------------------------------------------------
 {
   Returns true when both paths (A and B) points to the same file, false
   otherwise.
-  If either of the two paths points to a file that does not exist (or, in linux,
-  obtaining file information fails), the function will raise an EWFIFileError
-  exception.
+  If either of the two paths points to a file that does not exist, the function
+  will raise an EWFIFileError exception.
 }
 Function SameFile(const A,B: String): Boolean;
 
-{$IFNDEF LimitedImplementation}
 {===============================================================================
 --------------------------------------------------------------------------------
                                   TWinFileInfo
 --------------------------------------------------------------------------------
 ===============================================================================}
+type
+  TWFIFileHandle = {$IFDEF Windows}THandle{$ELSE}cint{$ENDIF};
+
 {===============================================================================
-    TWinFileInfo - system constants
+    TWinFileInfo - constants
 ===============================================================================}
+{$IFDEF Windows}
 const
   // File attributes flags
   INVALID_FILE_ATTRIBUTES = DWORD(-1); 
@@ -203,14 +213,16 @@ const
   VFT2_FONT_TRUETYPE = $00000003;
   VFT2_FONT_VECTOR   = $00000002;
 
+{$ENDIF}
+
 {===============================================================================
-    TWinFileInfo - structures
+    TWinFileInfo - types
 ===============================================================================}
+{$IFDEF Windows}
 {
   Following structures are used to store information about requested file in
   a more user-friendly and better accessible way.
-}
-
+}  
 type
   TWFIFileAttributesDecoded = record
     Archive:            Boolean;
@@ -237,7 +249,7 @@ type
   Group of structures used to store decoded information from fixed file info
   part of version information resource.
 }
-
+type
   TWFIFixedFileInfo_VersionMembers = record
     Major:    UInt16;
     Minor:    UInt16;
@@ -273,7 +285,7 @@ type
   Following structures are used to hold partially parsed information from
   version information structure.
 }
-
+type
   TWFIVersionInfoStruct_String = record
     Address:    Pointer;
     Size:       TMemSize;
@@ -336,7 +348,7 @@ type
   Following structures are used to store fully parsed information from version
   information structure.
 }
-
+type
   TWFITranslationItem = record
     LanguageName: String;
     LanguageStr:  String;
@@ -355,6 +367,24 @@ type
     Translation:  TWFITranslationItem;
     Strings:      array of TWFIStringTableItem;
   end;
+
+{$ELSE}//-----------------------------------------------------------------------
+{
+  Types used for decoded file mode - stores information about file type and
+  permissions.
+}
+type
+  TWFIFileType = (ftUnknown,ftFIFO,ftCharacterDevice,ftDirectory,ftBlockDevice,
+                  ftRegularFile,ftSymbolicLink,ftSocket);
+
+  TWFIFilePermission = (fpUserRead,fpUserWrite,fpUserExecute,
+                        fpGroupRead,fpGroupWrite,fpGroupExecute,
+                        fpOthersRead,fpOthersWrite,fpOthersExecute,
+                        fpSetUserID,fpSetGroupID,fpSticky);
+
+  TWFIFilePermissions = set of TWFIFilePermission;
+
+{$ENDIF}
 
 {===============================================================================
     TWinFileInfo - loading strategy
@@ -375,34 +405,34 @@ type
   lsaDecodeBasicInfo
     decode attributes and fills size string, requires lsaLoadBasicInfo
 
-  lsaLoadVersionInfo
+  lsaLoadVersionInfo (windows only)
     load version info, also loads translations and strings
 
-  lsaParseVersionInfo
+  lsaParseVersionInfo (windows only)
     do low-level parsing of version info data and enumerates keys, requires
     lsaLoadVersionInfo
 
-  lsaLoadFixedFileInfo
+  lsaLoadFixedFileInfo (windows only)
     load fixed file info, requires lsaLoadVersionInfo
 
-  lsaDecodeFixedFileInfo
+  lsaDecodeFixedFileInfo (windows only)
     decode fixed file info if present, has effect only if FFI is present
     (indicated by (f)VersionInfoFixedFileInfoPresent), requires
     lsaLoadFixedFileInfo
 
-  lsaVerInfoPredefinedKeys
+  lsaVerInfoPredefinedKeys (windows only)
     when no key is successfully enumerated (see lsaParseVersionInfo),
     a predefined set of keys is used, requires lsaParseVersionInfo
 
-  lsaVerInfoExtractTranslations
+  lsaVerInfoExtractTranslations (windows only)
     extract translations from parsed version info - might get some translation
     that normal translation loading (see lsaLoadVersionInfo) missed, requires
     lsaParseVersionInfo
 }
 type
-  TWFILoadingStrategyAction = (lsaLoadBasicInfo,lsaDecodeBasicInfo,lsaLoadVersionInfo,
-                               lsaParseVersionInfo,lsaLoadFixedFileInfo,lsaDecodeFixedFileInfo,
-                               lsaVerInfoPredefinedKeys,lsaVerInfoExtractTranslations);
+  TWFILoadingStrategyAction = (lsaLoadBasicInfo,lsaDecodeBasicInfo
+  {$IFDEF Windows},lsaLoadVersionInfo,lsaParseVersionInfo,lsaLoadFixedFileInfo,
+    lsaDecodeFixedFileInfo,lsaVerInfoPredefinedKeys,lsaVerInfoExtractTranslations{$ENDIF});
 
   TWFILoadingStrategy = set of TWFILoadingStrategyAction;
 
@@ -412,14 +442,22 @@ const
 
   WFI_LS_BasicInfo = [lsaLoadBasicInfo,lsaDecodeBasicInfo];
 
+{$IFDEF Windows}
+
   WFI_LS_FullInfo = WFI_LS_BasicInfo + [lsaLoadVersionInfo,lsaParseVersionInfo,
                     lsaLoadFixedFileInfo,lsaDecodeFixedFileInfo];
-
-  WFI_LS_All = WFI_LS_FullInfo + [lsaVerInfoPredefinedKeys,lsaVerInfoExtractTranslations];
 
   WFI_LS_VersionInfo = [lsaLoadVersionInfo,lsaParseVersionInfo,lsaVerInfoExtractTranslations];
 
   WFI_LS_VersionInfoAndFFI = WFI_LS_VersionInfo + [lsaLoadFixedFileInfo,lsaDecodeFixedFileInfo];
+
+  WFI_LS_All = WFI_LS_FullInfo + [lsaVerInfoPredefinedKeys,lsaVerInfoExtractTranslations];
+
+{$ELSE}
+
+  WFI_LS_All = WFI_LS_BasicInfo;
+
+{$ENDIF}
 
 {===============================================================================
     TWinFileInfo - class declaration
@@ -431,14 +469,21 @@ type
     fLoadingStrategy:         TWFILoadingStrategy;
     fFormatSettings:          TFormatSettings;
     // basic initial file info
+    fName:                    String;
     fLongName:                String;
+  {$IFDEF Windows}
     fShortName:               String;
+  {$ENDIF}
     fExists:                  Boolean;
-    fFileHandle:              THandle;
+    fFileHandle:              TWFIFileHandle;
     // basic loaded file info
     fSize:                    UInt64;
     fSizeStr:                 String;
-    fCreationTime:            TDateTime;
+  {$IFDEF Windows}
+    fCreationTimeRaw:         TDateTime;  // time how it is actually stored for the file
+    fLastAccessTimeRaw:       TDateTime;
+    fLastWriteTimeRaw:        TDateTime;
+    fCreationTime:            TDateTime;  // stored time converted to local time
     fLastAccessTime:          TDateTime;
     fLastWriteTime:           TDateTime;
     fNumberOfLinks:           UInt32;
@@ -453,6 +498,29 @@ type
     fAttributesStr:           String;
     fAttributesText:          String;
     fAttributesDecoded:       TWFIFileAttributesDecoded;
+  {$ELSE}
+    fLastAccessTimeRaw:       TDateTime;
+    fLastModificationTimeRaw: TDateTime;
+    fLastStatusChangeTimeRaw: TDateTime;
+    fLastAccessTime:          TDateTime;
+    fLastModificationTime:    TDateTime;
+    fLastStatusChangeTime:    TDateTime;
+    fNumberOfHardLinks:       PtrUInt;
+    // device ID and inode is used to determine file path equality
+    fDeviceID:                UInt64;
+    fiNodeNumber:             UInt64;
+    fBlockSize:               PtrUInt;
+    fBlocks:                  UInt64;
+    fOwnerUserID:             UInt32;
+    fOwnerGroupID:            UInt32;
+    fMode:                    UInt32;
+    // decoded mode
+    fFileType:                TWFIFileType;
+    fFileTypeStr:             String;
+    fPermissions:             TWFIFilePermissions;
+    fPermissionsStr:          String;
+  {$ENDIF}
+  {$IFDEF Windows}
     // version info unparsed data
     fVerInfoSize:             TMemSize;
     fVerInfoData:             Pointer;
@@ -475,45 +543,60 @@ type
     Function GetVersionInfoStringCount(Table: Integer): Integer;
     Function GetVersionInfoString(Table,Index: Integer): TWFIStringTableItem;
     Function GetVersionInfoValue(const Language,Key: String): String;
+  {$ENDIF}
   protected
+  {$IFDEF Windows}
     // version info loading methods
     procedure VersionInfo_LoadTranslations; virtual;
     procedure VersionInfo_LoadStrings; virtual;
     // version info parsing methods
     procedure VersionInfo_Parse; virtual;
-    procedure VersionInfo_ExtractTranslations; virtual;    
+    procedure VersionInfo_ExtractTranslations; virtual;
     procedure VersionInfo_EnumerateKeys; virtual;
+  {$ENDIF}
     // loading and decoding methods
     procedure LoadBasicInfo; virtual;
     procedure DecodeBasicInfo; virtual;
+  {$IFDEF Windows}
     procedure LoadVersionInfo; virtual;
     procedure LoadFixedFileInfo; virtual;
     procedure DecodeFixedFileInfo; virtual;
+  {$ENDIF}
     // other protected methods
     procedure Clear; virtual;    
     procedure Initialize(const FileName: String); virtual;
     procedure Finalize; virtual;
   public
+  {$IFDEF Windows}
     constructor Create(LoadingStrategy: TWFILoadingStrategy = WFI_LS_All); overload;
+  {$ENDIF}
     constructor Create(const FileName: String; LoadingStrategy: TWFILoadingStrategy = WFI_LS_All); overload;
     destructor Destroy; override;
     procedure Refresh; virtual;
-    Function IndexOfVersionInfoStringTable(Translation: DWORD): Integer; virtual;
-    Function IndexOfVersionInfoString(Table: Integer; const Key: String): Integer; virtual;
     procedure CreateReport(Strings: TStrings); overload; virtual;
     Function CreateReport: String; overload; virtual;
+  {$IFDEF Windows}
+    Function IndexOfVersionInfoStringTable(Translation: DWORD): Integer; virtual;
+    Function IndexOfVersionInfoString(Table: Integer; const Key: String): Integer; virtual;
+  {$ENDIF}
     // internals
     property LoadingStrategy: TWFILoadingStrategy read fLoadingStrategy write fLoadingStrategy;
     property FormatSettings: TFormatSettings read fFormatSettings write fFormatSettings;
     // basic initial file info
-    property Name: String read fLongName;
+    property Name: String read fName;
     property LongName: String read fLongName;
+  {$IFDEF Windows}
     property ShortName: String read fShortName;
+  {$ENDIF}
     property Exists: Boolean read fExists;
-    property FileHandle: THandle read fFileHandle;
+    property FileHandle: TWFIFileHandle read fFileHandle;
     // basic loaded file info
     property Size: UInt64 read fSize;
     property SizeStr: String read fSizeStr;
+  {$IFDEF Windows}
+    property CreationTimeRaw: TDateTime read fCreationTime;
+    property LastAccessTimeRaw: TDateTime read fLastAccessTime;
+    property LastWriteTimeRaw: TDateTime read fLastWriteTime;
     property CreationTime: TDateTime read fCreationTime;
     property LastAccessTime: TDateTime read fLastAccessTime;
     property LastWriteTime: TDateTime read fLastWriteTime;
@@ -525,6 +608,25 @@ type
     property AttributesStr: String read fAttributesStr;
     property AttributesText: String read fAttributesText;
     property AttributesDecoded: TWFIFileAttributesDecoded read fAttributesDecoded;
+  {$ELSE}
+    property LastAccessTime: TDateTime read fLastAccessTime;
+    property LastModificationTime: TDateTime read fLastModificationTime;
+    property LastStatusChangeTime: TDateTime read fLastStatusChangeTime;
+    property NumberOfHardLinks: PtrUInt read fNumberOfHardLinks;
+    property DeviceID: UInt64 read fDeviceID;
+    property iNodeNumber: UInt64 read fiNodeNumber;
+    property BlockSize: PtrUInt read fBlockSize;
+    property Blocks: UInt64 read fBlocks;
+    property OwnerUserID: UInt32 read fOwnerUserID;
+    property OwnerGroupID: UInt32 read fOwnerGroupID;
+    property Mode: UInt32 read fMode;
+    // decoded mode
+    property FileType: TWFIFileType read fFileType;
+    property FileTypeStr: String read fFileTypeStr;
+    property Permissions: TWFIFilePermissions read fPermissions;
+    property PermissionsStr: String read fPermissionsStr;
+  {$ENDIF}
+  {$IFDEF Windows}
     // version info unparsed data
     property VerInfoSize: PtrUInt read fVerInfoSize;
     property VerInfoData: Pointer read fVerInfoData;
@@ -545,164 +647,186 @@ type
     property VersionInfoStringCount[Table: Integer]: Integer read GetVersionInfoStringCount;
     property VersionInfoStrings[Table,Index: Integer]: TWFIStringTableItem read GetVersionInfoString;
     property VersionInfoValues[const Language,Key: String]: String read GetVersionInfoValue; default;
+  {$ENDIF}
   end;
-
-{$ENDIF LimitedImplementation}
 
 implementation
 
 uses
-  {$IFDEF LimitedImplementation}BaseUnix{$ELSE}StrRect{$ENDIF};
+  {$IFDEF Windows}StrRect{$ELSE}DateUtils, BaseUnix{$ENDIF};
 
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
   {$DEFINE W4055:={$WARN 4055 OFF}}   // Conversion between ordinals and pointers is not portable
-  {$DEFINE W5024:={$WARN 5024 OFF}}   // Parameter "$1" not used
   {$DEFINE W5057:={$WARN 5057 OFF}}   // Local variable "$1" does not seem to be initialized
   {$PUSH}{$WARN 2005 OFF}             // Comment level $1 found
   {$IF Defined(FPC) and (FPC_FULLVERSION >= 30000)}
-    {$DEFINE W5091:={$WARN 5091 OFF}} // Local variable "$1" of a managed type does not seem to be initialized
+    {$DEFINE W5058:=}
+    {$DEFINE W5092:={$WARN 5092 OFF}}   // Variable "$1" of a managed type does not seem to be initialized
   {$ELSE}
-    {$DEFINE W5091:=}
+    {$DEFINE W5058:={$WARN 5058 OFF}}   // Variable "$1" does not seem to be initialized
+    {$DEFINE W5092:=}
   {$IFEND}
   {$POP}
 {$ENDIF}
 
 {===============================================================================
-    Auxiliary functions
+--------------------------------------------------------------------------------
+                                Utility functions
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    Utility functions - implementation
 ===============================================================================}
 {-------------------------------------------------------------------------------
-    Auxiliary functions - public functions
+    Utility functions - internal functions
 -------------------------------------------------------------------------------}
 
-Function GetFileSize(const FileName: String): UInt64;
-{$IFDEF LimitedImplementation}  // non-windows
-var
-  iFile:    cInt;
-  FileStat: stat;
-begin
-FileStat := Default(stat);
-iFile := FpOpen(PChar(FileName),O_RDONLY);
-try
-  If iFile >= 0 then
-    begin
-      If FpFStat(iFile,FileStat) = 0 then
-        Result := FileStat.st_size
-      else
-        raise EWFIFileError.CreateFmt('GetFileSize: Failed to obtain stat for file "%s" (%d).',[FileName,errno]);
-    end
-  else raise EWFIFileError.CreateFmt('GetFileSize: Failed to open file "%s" (%d).',[FileName,errno]);
-finally
-  FpClose(iFile);
-end;
-{$ELSE} // windows
-begin
-with TWinFileInfo.Create(FileName,[lsaLoadBasicInfo]) do
-try
-  Result := Size;
-finally
-  Free;
-end;
-{$ENDIF}
-end;
-
-//------------------------------------------------------------------------------
-
-Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String;
+procedure ProcessFileSize(FileSize: UInt64; out Number: Double; out Decimals: Integer; out UnitPrefix: String);
+{
+  This routine takes size of a file in bytes and produces floating-point number
+  that can be used in textual representation of this size. Depending on a
+  "magnitude" of the size, a unit prefix is selected and number of decimal
+  digits to show is calculated. Also, the number is properly divided for the
+  selected unit prefix.
+}
 const
   BinaryPrefix: array[0..8] of String = ('','Ki','Mi','Gi','Ti','Pi','Ei','Zi','Yi');
   PrefixShift = 10;
 var
-  Offset: Integer;  
-  Deci:   Integer;  // number of shown decimal places
-  Num:    Double;
+  Magnitude:  Integer;
 begin
-Offset := -1;
+Magnitude := -1;
 repeat
-  Inc(Offset);
-until ((FileSize shr (PrefixShift * Succ(Offset))) = 0) or (Offset >= 8);
-case FileSize shr (PrefixShift * Offset) of
-   1..9:  Deci := 2;
-  10..99: Deci := 1;
+  Inc(Magnitude);
+until ((FileSize shr (PrefixShift * Succ(Magnitude))) = 0) or (Magnitude >= 8);
+case FileSize shr (PrefixShift * Magnitude) of
+   1..9:  Decimals := 2;
+  10..99: Decimals := 1;
 else
-  Deci := 0;
+  Decimals := 0;
 end;
-Num := (FileSize shr (PrefixShift * Offset));
-If Offset > 0 then
-  Num := Num + (((FileSize shr (PrefixShift * Pred(Offset))) and 1023) / 1024)
+Number := (FileSize shr (PrefixShift * Magnitude));
+If Magnitude > 0 then
+  Number := Number + (((FileSize shr (PrefixShift * Pred(Magnitude))) and 1023) / 1024)
 else
-  Deci := 0;
-If SpaceUnit then
-  Result := Format('%.*f %sB',[Deci,Num,BinaryPrefix[Offset]],FormatSettings)
-else
-  Result := Format('%.*f%sB',[Deci,Num,BinaryPrefix[Offset]],FormatSettings)
+  Decimals := 0;
+UnitPrefix := BinaryPrefix[Magnitude];
 end;
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//------------------------------------------------------------------------------
 
-{$IFDEF FPCDWM}{$PUSH}W5057 W5091{$ENDIF}
-Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String;
-var
-  FormatSettings: TFormatSettings;
+{$IFDEF Windows}{$IFDEF FPCDWM}{$PUSH}W5058 W5092{$ENDIF}{$ENDIF}
+procedure InitFormatSettings(out FormatSettings: TFormatSettings);
 begin
 {$WARN SYMBOL_PLATFORM OFF}
 {$IF not Defined(FPC) and (CompilerVersion >= 18)} // Delphi 2006+
 FormatSettings := TFormatSettings.Create(LOCALE_USER_DEFAULT);
 {$ELSE}
-{$IFDEF LimitedImplementation}
+{$IFDEF Windows}
+GetLocaleFormatSettings(LOCALE_USER_DEFAULT,FormatSettings);
+{$ELSE}
 // non-windows
 FormatSettings := DefaultFormatSettings;
-{$ELSE}
-// windows
-GetLocaleFormatSettings(LOCALE_USER_DEFAULT,FormatSettings);
 {$ENDIF}
 {$IFEND}
 {$WARN SYMBOL_PLATFORM ON}
+end;
+{$IFDEF Windows}{$IFDEF FPCDWM}{$POP}{$ENDIF}{$ENDIF}
+
+{$IFDEF Windows}
+//------------------------------------------------------------------------------
+
+{$IF not Declared(CP_THREAD_ACP)}
+const
+  CP_THREAD_ACP = 3;
+{$IFEND}
+
+Function WideToString(const WStr: WideString; AnsiCodePage: UINT = CP_THREAD_ACP): String;
+begin
+{$IFDEF Unicode}
+// unicode Delphi or FPC (String = UnicodeString)
+Result := WStr;
+{$ELSE}
+// non-unicode...
+If not UTF8AnsiDefaultStrings then
+  begin
+    // CP ansi strings - bare FPC or Delphi
+    SetLength(Result,WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),nil,0,nil,nil));
+    WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),PAnsiChar(Result),Length(Result) * SizeOf(AnsiChar),nil,nil);
+    // a wrong codepage might be stored, try translation with default cp
+    If (AnsiCodePage <> CP_THREAD_ACP) and (Length(Result) <= 0) and (Length(WStr) > 0) then
+      Result := WideToString(WStr);
+  end
+// UTF8 ansi strings
+else Result := StringToUTF8(WStr);
+{$ENDIF}
+end;
+
+{$ENDIF}
+
+{-------------------------------------------------------------------------------
+    Utility functions - public functions
+-------------------------------------------------------------------------------}
+
+Function GetFileSize(const FileName: String): UInt64;
+begin
+Result := 0;
+with TWinFileInfo.Create(FileName,[lsaLoadBasicInfo]) do
+try
+  If Exists then
+    Result := Size
+  else
+    raise EWFIFileError.CreateFmt('SameFile: File "%s" does not exist.',[FileName]);
+finally
+  Free;
+end;
+end;
+
+//------------------------------------------------------------------------------
+
+Function FileSizeToStr(FileSize: UInt64; FormatSettings: TFormatSettings; SpaceUnit: Boolean = True): String;
+var
+  Number:     Double;
+  Decimals:   Integer;
+  UnitPrefix: String;
+begin
+ProcessFileSize(FileSize,Number,Decimals,UnitPrefix);
+If SpaceUnit then
+  Result := Format('%.*f %sB',[Decimals,Number,UnitPrefix],FormatSettings)
+else
+  Result := Format('%.*f%sB',[Decimals,Number,UnitPrefix],FormatSettings);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function FileSizeToStr(FileSize: UInt64; SpaceUnit: Boolean = True): String;
+var
+  Number:     Double;
+  Decimals:   Integer;
+  UnitPrefix: String;
+begin
+ProcessFileSize(FileSize,Number,Decimals,UnitPrefix);
+If SpaceUnit then
+  Result := Format('%.*f %sB',[Decimals,Number,UnitPrefix])
+else
+  Result := Format('%.*f%sB',[Decimals,Number,UnitPrefix]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function FileSizeToStrThr(FileSize: UInt64; SpaceUnit: Boolean = True): String;
+var
+  FormatSettings: TFormatSettings;
+begin
+InitFormatSettings(FormatSettings);
 Result := FileSizeToStr(FileSize,FormatSettings,SpaceUnit);
 end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
 
 //------------------------------------------------------------------------------
 
 Function SameFile(const A,B: String): Boolean;
-{$IFDEF LimitedImplementation}  // non-windows
 var
-  FileA,FileB:  cInt;
-  StatA,StatB:  stat;
-begin
-StatA := Default(stat);
-StatB := Default(stat);
-FileA := FpOpen(PChar(A),O_RDONLY);
-try
-  If FileA >= 0 then
-    begin
-      FileB := FpOpen(PChar(B),O_RDONLY);
-      try
-        If FileB >= 0 then
-          begin
-            If FpFStat(FileA,StatA) = 0 then
-              begin
-                If FpFStat(FileB,StatB) = 0 then
-                  begin
-                    Result := (StatA.st_dev = StatB.st_dev) and
-                              (StatA.st_ino = StatB.st_ino);
-                  end
-                else raise EWFIFileError.CreateFmt('SameFile: Failed to obtain stat for file "%s" (%d).',[B,errno]);
-              end
-            else raise EWFIFileError.CreateFmt('SameFile: Failed to obtain stat for file "%s" (%d).',[A,errno]);
-          end
-        else raise EWFIFileError.CreateFmt('SameFile: Failed to open file "%s" (%d).',[B,errno]);
-      finally
-        FpClose(FileB);
-      end;
-    end
-  else raise EWFIFileError.CreateFmt('SameFile: Failed to open file "%s" (%d).',[A,errno]);
-finally
-  FpClose(FileA);
-end;
-end;
-{$ELSE} // windows
-var              
   AInfo,BInfo:  TWinFileInfo;
 begin
 Result := False;
@@ -713,7 +837,11 @@ try
       BInfo := TWinFileInfo.Create(B,[lsaLoadBasicInfo]);
       try
         If BInfo.Exists then
+        {$IFDEF Windows}
           Result := (AInfo.VolumeSerialNumber = BInfo.VolumeSerialNumber) and (AInfo.FileID = BInfo.FileID)
+        {$ELSE}
+          Result := (AInfo.DeviceID = BInfo.DeviceID) and (AInfo.iNodeNumber = BInfo.iNodeNumber)
+        {$ENDIF}
         else
           raise EWFIFileError.CreateFmt('SameFile: File "%s" does not exist.',[B]);
       finally
@@ -725,41 +853,6 @@ finally
   AInfo.Free;
 end;
 end;
-{$ENDIF}
-
-{$IFNDEF LimitedImplementation}
-{-------------------------------------------------------------------------------
-    Auxiliary functions - local functions
--------------------------------------------------------------------------------}
-
-{$IF not Declared(CP_THREAD_ACP)}
-const
-  CP_THREAD_ACP = 3;
-{$IFEND}
-
-{$IFDEF FPCDWM}{$PUSH}W5024{$ENDIF}
-Function WideToString(const WStr: WideString; AnsiCodePage: UINT = CP_THREAD_ACP): String;
-begin
-{$IFDEF Unicode}
-// unicode Delphi or FPC (String = UnicodeString)
-Result := WStr;
-{$ELSE}
-// non-unicode...
-If not UTF8AnsiDefaultStrings then
-  begin
-    // CP ansi strings
-    // bare FPC or Delphi
-    SetLength(Result,WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),nil,0,nil,nil));
-    WideCharToMultiByte(AnsiCodePage,0,PWideChar(WStr),Length(WStr),PAnsiChar(Result),Length(Result) * SizeOf(AnsiChar),nil,nil);
-    // A wrong codepage might be stored, try translation with default cp
-    If (AnsiCodePage <> CP_THREAD_ACP) and (Length(Result) <= 0) and (Length(WStr) > 0) then
-      Result := WideToString(WStr);
-  end
-// UTF8 ansi strings
-else Result := StringToUTF8(WStr);
-{$ENDIF}
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -767,17 +860,22 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 {===============================================================================
-    TWinFileInfo - external functions
+    TWinFileInfo - system constants
 ===============================================================================}
+{$IFNDEF Windows}
+const
+  O_NOATIME = $40000;   // do not set atime
+  O_PATH	  = $200000;  // resolve pathname but do not open file
 
-{$IF not Declared(GetFileSizeEx)}
-Function GetFileSizeEx(hFile: THandle; lpFileSize: PUInt64): BOOL; stdcall; external 'kernel32.dll';
-{$IFEND}
+  S_ISUID = $800; // set-user-ID bit
+  S_ISGID = $400; // set-group-ID bit
+  S_ISVTX = $200; // sticky bit
+{$ENDIF}
 
 {===============================================================================
     TWinFileInfo - conversion tables
 ===============================================================================}
-
+{$IFDEF Windows}
 // structures used in conversion tables as items
 type
   TWFIAttributeString = record
@@ -876,12 +974,30 @@ const
     'LegalCopyright','LegalTrademarks','OriginalFilename','ProductName',
     'ProductVersion','PrivateBuild','SpecialBuild');
 
+{$ELSE}//-----------------------------------------------------------------------
+const
+  WFI_FILE_TYPE_STRS: array[TWFIFileType] of String = (
+    'unknown','named pipe','character device','directory','block device',
+    'regular file','symbolic link','socket');
+
+//------------------------------------------------------------------------------
+
+  WFI_PERMISSION_FLAGS: array[TWFIFilePermission] of UInt32 = (
+    S_IRUSR,S_IWUSR,S_IXUSR,  // user
+    S_IRGRP,S_IWGRP,S_IXGRP,  // group
+    S_IROTH,S_IWOTH,S_IXOTH,  // others
+    S_ISUID,S_ISGID,S_ISVTX);
+
+{$ENDIF}
+
 {===============================================================================
     TWinFileInfo - class implementation
 ===============================================================================}
 {-------------------------------------------------------------------------------
     TWinFileInfo - private methods
 -------------------------------------------------------------------------------}
+
+{$IFDEF Windows}
 
 Function TWinFileInfo.GetVersionInfoStringTableCount: Integer;
 begin
@@ -950,9 +1066,13 @@ If fVersionInfoPresent and (Language <> '') and (Key <> '') then
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 
+{$ENDIF}
+
 {-------------------------------------------------------------------------------
     TWinFileInfo - protected methods
 -------------------------------------------------------------------------------}
+
+{$IFDEF Windows}
 
 {$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
 procedure TWinFileInfo.VersionInfo_LoadTranslations;
@@ -1126,7 +1246,7 @@ If (fVerInfoSize >= 6) and (fVerInfoSize >= PUInt16(fVerInfoData)^) then
                   end;
               end;
           end
-        else raise EWFIException.CreateFmt('TWinFileInfo.VersionInfo_Parse: Unknown block (%s).',[TempBlock.Key]);
+        else raise EWFIProcessingError.CreateFmt('TWinFileInfo.VersionInfo_Parse: Unknown block (%s).',[TempBlock.Key]);
       end;
     fVersionInfoParsed := True;
   except
@@ -1205,14 +1325,25 @@ For i := Low(fVersionInfoStruct.StringFileInfos) to High(fVersionInfoStruct.Stri
         end;
 end;
 
+{$ENDIF}
+
 //------------------------------------------------------------------------------
 
-{$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
+{$IFDEF Windows}{$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}{$ENDIF}
 procedure TWinFileInfo.LoadBasicInfo;
-var
-  Info: TByHandleFileInformation;
+{$IFDEF Windows}
 
   Function FileTimeToDateTime(FileTime: TFileTime): TDateTime;
+  var
+    SystemTime: TSystemTime;
+  begin
+    If FileTimeToSystemTime(FileTime,SystemTime) then
+      Result := SystemTimeToDateTime(SystemTime)
+    else raise EWFISystemError.CreateFmt('TWinFileInfo.LoadBasicInfo.FileTimeToDateTime: ' +
+                                         'Failed to convert file time to system time (%d).',[GetLastError]);
+  end;
+
+  Function FileTimeToLocalDateTime(FileTime: TFileTime): TDateTime;
   var
     LocalTime:  TFileTime;
     SystemTime: TSystemTime;
@@ -1221,30 +1352,67 @@ var
       begin
         If FileTimeToSystemTime(LocalTime,SystemTime) then
           Result := SystemTimeToDateTime(SystemTime)
-        else raise EWFISystemError.CreateFmt('FileTimeToSystemTime failed with error 0x%.8x.',[GetLastError]);
+        else raise EWFISystemError.CreateFmt('TWinFileInfo.LoadBasicInfo.FileTimeToLocalDateTime: ' +
+                                             'Failed to convert file time to system time (%d).',[GetLastError]);
       end
-    else raise EWFISystemError.CreateFmt('FileTimeToLocalFileTime failed with error 0x%.8x.',[GetLastError]);
+    else raise EWFISystemError.CreateFmt('TWinFileInfo.LoadBasicInfo.FileTimeToLocalDateTime: ' +
+                                         'Failed to convert to local time (%d).',[GetLastError]);
   end;
 
+var
+  Info: TByHandleFileInformation;
 begin
+FillChar(Info,SizeOf(TByHandleFileInformation),0);
 If GetFileInformationByHandle(fFileHandle,Info) then
   begin
     fSize := (UInt64(Info.nFileSizeHigh) shl 32) or UInt64(Info.nFileSizeLow);
-    fCreationTime := FileTimeToDateTime(Info.ftCreationTime);
-    fLastAccessTime := FileTimeToDateTime(Info.ftLastAccessTime);
-    fLastWriteTime := FileTimeToDateTime(Info.ftLastWriteTime);
+    fCreationTimeRaw := FileTimeToDateTime(Info.ftCreationTime);
+    fLastAccessTimeRaw := FileTimeToDateTime(Info.ftLastAccessTime);
+    fLastWriteTimeRaw := FileTimeToDateTime(Info.ftLastWriteTime);
+    fCreationTime := FileTimeToLocalDateTime(Info.ftCreationTime);
+    fLastAccessTime := FileTimeToLocalDateTime(Info.ftLastAccessTime);
+    fLastWriteTime := FileTimeToLocalDateTime(Info.ftLastWriteTime);
     fNumberOfLinks := Info.nNumberOfLinks;
     fVolumeSerialNumber := Info.dwVolumeSerialNumber;
     fFileID := (UInt64(Info.nFileIndexHigh) shl 32) or UInt64(Info.nFileIndexLow);
     fAttributesFlags := Info.dwFileAttributes;
   end
-else raise EWFISystemError.CreateFmt('GetFileInformationByHandle failed with error 0x%.8x.',[GetLastError]);
+else raise EWFISystemError.CreateFmt('TWinFileInfo.LoadBasicInfo: Failed to obtain file info (%d).',[GetLastError]);
 end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
+{$ELSE}
+const
+  NanoSecsPerDay = 24 * 3600 * 1000000000;
+var
+  FileStat: stat;
+begin
+FillChar(Addr(FileStat)^,SizeOf(stat),0);
+If FpFStat(fFileHandle,FileStat) = 0 then
+  begin
+    fSize := UInt64(FileStat.st_size);
+    fLastAccessTimeRaw := UnixToDateTime(FileStat.st_atime) + (FileStat.st_atime_nsec / NanoSecsPerDay);
+    fLastModificationTimeRaw := UnixToDateTime(FileStat.st_mtime) + (FileStat.st_mtime_nsec / NanoSecsPerDay);
+    fLastStatusChangeTimeRaw := UnixToDateTime(FileStat.st_ctime) + (FileStat.st_ctime_nsec / NanoSecsPerDay);
+    fLastAccessTime := UniversalTimeToLocal(fLastAccessTimeRaw);
+    fLastModificationTime := UniversalTimeToLocal(fLastModificationTimeRaw);
+    fLastStatusChangeTime := UniversalTimeToLocal(fLastStatusChangeTimeRaw);
+    fNumberOfHardLinks := PtrUInt(FileStat.st_nlink);
+    fDeviceID := UInt64(FileStat.st_dev);
+    fiNodeNumber := UInt64(FileStat.st_ino);
+    fBlockSize := PtrUInt(FileStat.st_blksize);
+    fBlocks := UInt64(FileStat.st_blocks);
+    fOwnerUserID := UInt32(FileStat.st_uid);
+    fOwnerGroupID := UInt32(FileStat.st_gid);
+    fMode := UInt32(FileStat.st_mode);
+  end
+else raise EWFISystemError.CreateFmt('TWinFileInfo.LoadBasicInfo: Failed to obtain file stat (%d)',[errno]);
+end;
+{$ENDIF}
+{$IFDEF Windows}{$IFDEF FPCDWM}{$POP}{$ENDIF}{$ENDIF}
 
 //------------------------------------------------------------------------------
 
 procedure TWinFileInfo.DecodeBasicInfo;
+{$IFDEF Windows}
 
   // This function also fills AttributesStr and AttributesText strings
   Function ProcessAttribute(AttributeFlag: DWORD): Boolean;
@@ -1286,8 +1454,77 @@ fAttributesDecoded.System            := ProcessAttribute(FILE_ATTRIBUTE_SYSTEM);
 fAttributesDecoded.Temporary         := ProcessAttribute(FILE_ATTRIBUTE_TEMPORARY);
 fAttributesDecoded.Virtual           := ProcessAttribute(FILE_ATTRIBUTE_VIRTUAL);
 end;
+{$ELSE}
+
+  procedure AddToString(var Str: String; const Addend: String);
+  begin
+    If Length(Addend) > 0 then
+      begin
+        If Length(Str) > 0 then
+          Str := Str + ' ' + Addend
+        else
+          Str := Addend;
+      end;
+  end;
+
+  Function GetRWXStr(CheckedPerms: array of TWFIFilePermission; const Prefix: String): String;
+  begin
+    Result := '';
+    If Length(CheckedPerms) >= 3 then
+      begin
+        If CheckedPerms[0] in fPermissions then
+          Result := Result + 'R';
+        If CheckedPerms[1] in fPermissions then
+          Result := Result + 'W';
+        If CheckedPerms[2] in fPermissions then
+          Result := Result + 'X';
+      end;
+    If Length(Result) > 0 then
+      Result := Prefix + Result;
+  end;
+
+var
+  i:  TWFIFilePermission;
+begin
+fSizeStr := FileSizeToStr(fSize,fFormatSettings);
+// decode mode... file type
+case (fMode and S_IFMT) of
+  S_IFIFO:  fFileType := ftFIFO;
+  S_IFCHR:  fFileType := ftCharacterDevice;
+  S_IFDIR:  fFileType := ftDirectory;
+  S_IFBLK:  fFileType := ftBlockDevice;
+  S_IFREG:  fFileType := ftRegularFile;
+  S_IFLNK:  fFileType := ftSymbolicLink;
+  S_IFSOCK: fFileType := ftSocket;
+else
+  fFileType := ftUnknown;
+end;
+fFileTypeStr := WFI_FILE_TYPE_STRS[fFileType];
+// file permissions
+fPermissions := [];
+For i := Low(TWFIFilePermission) to High(TWFIFilePermission) do
+  If fMode and WFI_PERMISSION_FLAGS[i] <> 0 then
+    Include(fPermissions,i);
+// permissions to text
+fPermissionsStr := '';
+If (fPermissions * [fpUserRead,fpUserWrite,fpUserExecute]) <> [] then
+  AddToString(fPermissionsStr,GetRWXStr([fpUserRead,fpUserWrite,fpUserExecute],'U-'));
+If (fPermissions * [fpGroupRead,fpGroupWrite,fpGroupExecute]) <> [] then
+  AddToString(fPermissionsStr,GetRWXStr([fpGroupRead,fpGroupWrite,fpGroupExecute],'G-'));
+If (fPermissions * [fpOthersRead,fpOthersWrite,fpOthersExecute]) <> [] then
+  AddToString(fPermissionsStr,GetRWXStr([fpOthersRead,fpOthersWrite,fpOthersExecute],'O-'));
+If fpSetUserID in fPermissions then
+  AddToString(fPermissionsStr,'SUID');
+If fpSetGroupID in fPermissions then
+  AddToString(fPermissionsStr,'SGID');
+If fpSticky in fPermissions then
+  AddToString(fPermissionsStr,'STCK');
+end;
+{$ENDIF}
 
 //------------------------------------------------------------------------------
+
+{$IFDEF Windows}
 
 {$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
 procedure TWinFileInfo.LoadVersionInfo;
@@ -1337,7 +1574,7 @@ If fVersionInfoFFIPresent then
     If FFISize = SizeOf(TVSFixedFileInfo) then
       fVersionInfoFFI := PVSFixedFileInfo(FFIPtr)^
     else
-      raise EWFIException.CreateFmt('TWinFileInfo.LoadFixedFileInfo: Wrong size of fixed file information (got %d, expected %d).',[FFISize,SizeOf(TVSFixedFileInfo)]);
+      raise EWFIProcessingError.CreateFmt('TWinFileInfo.LoadFixedFileInfo: Wrong size of fixed file information (got %d, expected %d).',[FFISize,SizeOf(TVSFixedFileInfo)]);
   end;
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
@@ -1405,6 +1642,8 @@ with fVersionInfoFFIDecoded,fVersionInfoFFI do
   end;
 end;
 
+{$ENDIF}
+
 //------------------------------------------------------------------------------
 
 procedure TWinFileInfo.Clear;
@@ -1412,6 +1651,10 @@ begin
 // do not clear file handle, existence indication and names
 fSize := 0;
 fSizeStr := '';
+{$IFDEF Windows}
+fCreationTimeRaw := 0;
+fLastAccessTimeRaw := 0;
+fLastWriteTimeRaw := 0;
 fCreationTime := 0;
 fLastAccessTime := 0;
 fLastWriteTime := 0;
@@ -1451,20 +1694,43 @@ FillChar(fVersionInfoStruct,SizeOf(fVersionInfoStruct),0);
 // version info fully parsed data
 fVersionInfoParsed := False;
 SetLength(fVersionInfoStringTables,0);
+{$ELSE}
+fLastAccessTimeRaw := 0;
+fLastModificationTimeRaw := 0;
+fLastStatusChangeTimeRaw := 0;
+fLastAccessTime := 0;
+fLastModificationTime := 0;
+fLastStatusChangeTime := 0;
+fNumberOfHardLinks := 0;
+fDeviceID := 0;
+fiNodeNumber := 0;
+fBlockSize := 0;
+fBlocks := 0;
+fOwnerUserID := 0;
+fOwnerGroupID := 0;
+fMode := 0;
+// decoded mode
+fFileType := ftUnknown;
+fFileTypeStr := '';
+fPermissions := [];
+fPermissionsStr := '';
+{$ENDIF}
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TWinFileInfo.Initialize(const FileName: String);
 var
-  LastError:  Integer;
+  LastError:  {$IFDEF Windows}Integer{$ELSE}cint{$ENDIF};
 begin
-// set file paths
+{$IFDEF Windows}
+// set file-name-paths
+fName := FileName;
 fLongName := RTLToStr(ExpandFileName(StrToRTL(FileName)));
 SetLength(fShortName,MAX_PATH);
 SetLength(fShortName,GetShortPathName(PChar(StrToWin(fLongName)),PChar(fShortName),Length(fShortName)));
 fShortName := WinToStr(fShortName);
-// open file and check its existence (with this arguments cannot it open a directory, so that one is good)
+// open file and check its existence (with this arguments it cannot open a directory, so that one is good)
 fFileHandle := CreateFile(PChar(StrToWin(fLongName)),0,FILE_SHARE_READ or FILE_SHARE_WRITE,nil,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
 If fFileHandle <> INVALID_HANDLE_VALUE then
   begin
@@ -1499,8 +1765,33 @@ else
     If LastError = ERROR_FILE_NOT_FOUND then
       fExists := False
     else
-      raise EWFISystemError.CreateFmt('CreateFile failed with error 0x%.8x.',[LastError]);
+      raise EWFISystemError.CreateFmt('TWinFileInfo.Initialize: Failed to open requested file (%d).',[LastError]);
   end;
+{$ELSE}
+fName := FileName;
+fLongName := ExpandFileName(FileName);
+fFileHandle := FpOpen(PChar(fLongName),O_RDONLY or O_NOATIME or O_PATH);
+If fFileHandle <> -1 then
+  begin
+    // file was successfully opened
+    fExists := True;
+    If lsaLoadBasicInfo in fLoadingStrategy then
+      begin
+        LoadBasicInfo;
+        If lsaDecodeBasicInfo in fLoadingStrategy then
+          DecodeBasicInfo;
+      end;
+  end
+else
+  begin
+    // FpOpen has failed
+    LastError := errno;
+    If LastError = ESysENOENT then
+      fExists := False
+    else
+      raise EWFISystemError.CreateFmt('TWinFileInfo.Initialize: Failed to open requested file (%d)',[LastError]);
+  end;
+{$ENDIF}
 end;
 
 //------------------------------------------------------------------------------
@@ -1508,14 +1799,20 @@ end;
 procedure TWinFileInfo.Finalize;
 begin
 Clear;
+{$IFDEF Windows}
 CloseHandle(fFileHandle);
 fFileHandle := INVALID_HANDLE_VALUE;
+{$ELSE}
+FpClose(fFileHandle); // ignore errors
+fFileHandle := -1;
+{$ENDIF}
 end;
 
 {-------------------------------------------------------------------------------
     TWinFileInfo - public methods
 -------------------------------------------------------------------------------}
 
+{$IFDEF Windows}
 constructor TWinFileInfo.Create(LoadingStrategy: TWFILoadingStrategy = WFI_LS_All);
 var
   ModuleFileName: String;
@@ -1525,6 +1822,7 @@ SetLength(ModuleFileName,GetModuleFileName(hInstance,PChar(ModuleFileName),Lengt
 ModuleFileName := WinToStr(ModuleFileName);
 Create(ModuleFileName,LoadingStrategy);
 end;
+{$ENDIF}
 
 //--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
@@ -1532,13 +1830,7 @@ constructor TWinFileInfo.Create(const FileName: String; LoadingStrategy: TWFILoa
 begin
 inherited Create;
 fLoadingStrategy := LoadingStrategy;
-{$WARN SYMBOL_PLATFORM OFF}
-{$IF not Defined(FPC) and (CompilerVersion >= 18)} // Delphi 2006+
-fFormatSettings := TFormatSettings.Create(LOCALE_USER_DEFAULT);
-{$ELSE}
-GetLocaleFormatSettings(LOCALE_USER_DEFAULT,fFormatSettings);
-{$IFEND}
-{$WARN SYMBOL_PLATFORM ON}
+InitFormatSettings(fFormatSettings);
 Initialize(FileName);
 end;
 
@@ -1554,50 +1846,21 @@ end;
 
 procedure TWinFileInfo.Refresh;
 begin
-Clear;
-Finalize;
-Initialize(fLongName);
-end;
- 
-//------------------------------------------------------------------------------
-
-Function TWinFileInfo.IndexOfVersionInfoStringTable(Translation: DWORD): Integer;
-var
-  i:  Integer;
-begin
-Result := -1;
-For i := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
-  If fVersionInfoStringTables[i].Translation.Translation = Translation then
-    begin
-      Result := i;
-      Exit;
-    end;
-end;
-
-//------------------------------------------------------------------------------
-
-Function TWinFileInfo.IndexOfVersionInfoString(Table: Integer; const Key: String): Integer;
-var
-  i:  Integer;
-begin
-Result := -1;
-with GetVersionInfoStringTable(Table) do
-  For i := Low(Strings) to High(Strings) do
-    If AnsiSameText(Strings[i].Key,Key) then
-      begin
-        Result := i;
-        Exit;
-      end;
+Finalize; // calls Clear
+Initialize(fName);
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TWinFileInfo.CreateReport(Strings: TStrings);
+{$IFDEF Windows}
 var
   i,j:  Integer;
   Len:  Integer;
+{$ENDIF}
 begin
 Strings.Add('=== TWinInfoFile report, created on ' + DateTimeToStr(Now,fFormatSettings) + ' ===');
+{$IFDEF Windows}
 Strings.Add(sLineBreak + '--- General info ---' + sLineBreak);
 Strings.Add('  Exists:     ' + BoolToStr(fExists,True));
 Strings.Add('  Long name:  ' + LongName);
@@ -1606,9 +1869,9 @@ Strings.Add(sLineBreak + 'Size:' + sLineBreak);
 Strings.Add('  Size:    ' + IntToStr(fSize));
 Strings.Add('  SizeStr: ' + SizeStr);
 Strings.Add(sLineBreak + 'Time:' + sLineBreak);
-Strings.Add('  Created:     ' + DateTimeToStr(fCreationTime));
-Strings.Add('  Last access: ' + DateTimeToStr(fLastAccessTime));
-Strings.Add('  Last write:  ' + DateTimeToStr(fLastWriteTime));
+Strings.Add(Format('  Created:     %s (%s)',[DateTimeToStr(fCreationTime),DateTimeToStr(fCreationTimeRaw)]));
+Strings.Add(Format('  Last access: %s (%s)',[DateTimeToStr(fLastAccessTime),DateTimeToStr(fLastAccessTimeRaw)]));
+Strings.Add(Format('  Last write:  %s (%s)',[DateTimeToStr(fLastWriteTime),DateTimeToStr(fLastWriteTimeRaw)]));
 Strings.Add(sLineBreak + 'Others:' + sLineBreak);
 Strings.Add('  Number of links:      ' + IntToStr(fNumberOfLinks));
 Strings.Add('  Volume serial number: ' + IntToHex(fVolumeSerialNumber,8));
@@ -1716,6 +1979,44 @@ If fVersionInfoPresent then
       else Strings.Add(sLineBreak + 'No string table found.');
   end
 else Strings.Add(sLineBreak + 'File version information not present.');
+{$ELSE}
+Strings.Add(sLineBreak + '--- General info ---' + sLineBreak);
+Strings.Add('  Exists:     ' + BoolToStr(fExists,True));
+Strings.Add('  Long name:  ' + LongName);
+Strings.Add(sLineBreak + 'Size:' + sLineBreak);
+Strings.Add('  Size:    ' + IntToStr(fSize));
+Strings.Add('  SizeStr: ' + SizeStr);
+Strings.Add(sLineBreak + 'Time:' + sLineBreak);
+Strings.Add(Format('  Last access:        %s (%s)',[DateTimeToStr(fLastAccessTime),DateTimeToStr(fLastAccessTimeRaw)]));
+Strings.Add(Format('  Last modification:  %s (%s)',[DateTimeToStr(fLastModificationTime),DateTimeToStr(fLastModificationTimeRaw)]));
+Strings.Add(Format('  Last status change: %s (%s)',[DateTimeToStr(fLastStatusChangeTime),DateTimeToStr(fLastStatusChangeTimeRaw)]));
+Strings.Add(sLineBreak + 'Others:' + sLineBreak);
+Strings.Add('  Number of hard links: ' + IntToStr(fNumberOfHardLinks));
+Strings.Add('  Device ID:            ' + IntToStr(fDeviceID));
+Strings.Add('  iNode number:         ' + IntToStr(fiNodeNumber));
+Strings.Add('  Block Size:           ' + IntToStr(fBlockSize));
+Strings.Add('  Block count:          ' + IntToStr(fBlocks));
+Strings.Add('  Owner user ID:        ' + IntToStr(fOwnerUserID));
+Strings.Add('  Owner group ID:       ' + IntToStr(fOwnerGroupID));
+Strings.Add('  File mode:            ' + IntToHex(fMode,8));
+Strings.Add(sLineBreak + 'File type:' + sLineBreak);
+Strings.Add('  File type:        ' + IntToStr(Ord(fFileType)));
+Strings.Add('  File type string: ' + fFileTypeStr);
+Strings.Add(sLineBreak + 'Permissions:' + sLineBreak);
+Strings.Add('  User can read:      ' + BoolToStr(fpUserRead in fPermissions,True));
+Strings.Add('  User can write:     ' + BoolToStr(fpUserWrite in fPermissions,True));
+Strings.Add('  User can execute:   ' + BoolToStr(fpUserExecute in fPermissions,True));
+Strings.Add('  Group can read:     ' + BoolToStr(fpGroupRead in fPermissions,True));
+Strings.Add('  Group can write:    ' + BoolToStr(fpGroupWrite in fPermissions,True));
+Strings.Add('  Group can execute:  ' + BoolToStr(fpGroupExecute in fPermissions,True));
+Strings.Add('  Others can read:    ' + BoolToStr(fpOthersRead in fPermissions,True));
+Strings.Add('  Others can write:   ' + BoolToStr(fpOthersWrite in fPermissions,True));
+Strings.Add('  Others can execute: ' + BoolToStr(fpOthersExecute in fPermissions,True));
+Strings.Add('  Set user ID:        ' + BoolToStr(fpSetUserID in fPermissions,True));
+Strings.Add('  Set group ID:       ' + BoolToStr(fpSetGroupID in fPermissions,True));
+Strings.Add('  Sticky bit:         ' + BoolToStr(fpSticky in fPermissions,True));
+Strings.Add(sLineBreak + '  File permissions string: ' + fPermissionsStr);
+{$ENDIF}
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1733,6 +2034,39 @@ finally
 end;
 end;
 
-{$ENDIF LimitedImplementation}
+//------------------------------------------------------------------------------
+
+{$IFDEF Windows}
+
+Function TWinFileInfo.IndexOfVersionInfoStringTable(Translation: DWORD): Integer;
+var
+  i:  Integer;
+begin
+Result := -1;
+For i := Low(fVersionInfoStringTables) to High(fVersionInfoStringTables) do
+  If fVersionInfoStringTables[i].Translation.Translation = Translation then
+    begin
+      Result := i;
+      Exit;
+    end;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TWinFileInfo.IndexOfVersionInfoString(Table: Integer; const Key: String): Integer;
+var
+  i:  Integer;
+begin
+Result := -1;
+with GetVersionInfoStringTable(Table) do
+  For i := Low(Strings) to High(Strings) do
+    If AnsiSameText(Strings[i].Key,Key) then
+      begin
+        Result := i;
+        Exit;
+      end;
+end;
+
+{$ENDIF}
 
 end.
