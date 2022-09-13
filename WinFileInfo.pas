@@ -23,7 +23,7 @@
 
   Version 1.1 (2022-01-18)
 
-  Last change 2022-01-18
+  Last change 2022-09-14
 
   ©2015-2022 František Milt
 
@@ -464,7 +464,7 @@ const
 ===============================================================================}
 type
   TWinFileInfo = class(TObject)
-  private
+  protected
     // internals
     fLoadingStrategy:         TWFILoadingStrategy;
     fFormatSettings:          TFormatSettings;
@@ -536,16 +536,13 @@ type
     fVersionInfoParsed:       Boolean;
     fVersionInfoStringTables: array of TWFIStringTable;
     // getters for fVersionInfoStruct fields
-    Function GetVersionInfoStringTableCount: Integer;
-    Function GetVersionInfoStringTable(Index: Integer): TWFIStringTable;
-    Function GetVersionInfoTranslationCount: Integer;
-    Function GetVersionInfoTranslation(Index: Integer): TWFITranslationItem;
-    Function GetVersionInfoStringCount(Table: Integer): Integer;
-    Function GetVersionInfoString(Table,Index: Integer): TWFIStringTableItem;
-    Function GetVersionInfoValue(const Language,Key: String): String;
-  {$ENDIF}
-  protected
-  {$IFDEF Windows}
+    Function GetVersionInfoStringTableCount: Integer; virtual;
+    Function GetVersionInfoStringTable(Index: Integer): TWFIStringTable; virtual;
+    Function GetVersionInfoTranslationCount: Integer; virtual;
+    Function GetVersionInfoTranslation(Index: Integer): TWFITranslationItem; virtual;
+    Function GetVersionInfoStringCount(Table: Integer): Integer; virtual;
+    Function GetVersionInfoString(Table,Index: Integer): TWFIStringTableItem; virtual;
+    Function GetVersionInfoValue(const Language,Key: String): String; virtual;
     // version info loading methods
     procedure VersionInfo_LoadTranslations; virtual;
     procedure VersionInfo_LoadStrings; virtual;
@@ -994,7 +991,7 @@ const
     TWinFileInfo - class implementation
 ===============================================================================}
 {-------------------------------------------------------------------------------
-    TWinFileInfo - private methods
+    TWinFileInfo - protected methods
 -------------------------------------------------------------------------------}
 
 {$IFDEF Windows}
@@ -1066,13 +1063,7 @@ If fVersionInfoPresent and (Language <> '') and (Key <> '') then
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 
-{$ENDIF}
-
-{-------------------------------------------------------------------------------
-    TWinFileInfo - protected methods
--------------------------------------------------------------------------------}
-
-{$IFDEF Windows}
+//------------------------------------------------------------------------------
 
 {$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
 procedure TWinFileInfo.VersionInfo_LoadTranslations;
