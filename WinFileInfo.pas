@@ -23,7 +23,7 @@
 
   Version 1.1 (2022-01-18)
 
-  Last change 2022-09-14
+  Last change 2022-09-26
 
   ©2015-2022 František Milt
 
@@ -1888,7 +1888,7 @@ Strings.Add('    Reparse point:       ' + BoolToStr(fAttributesDecoded.ReparsePo
 Strings.Add('    Sparse file:         ' + BoolToStr(fAttributesDecoded.SparseFile,True));
 Strings.Add('    System:              ' + BoolToStr(fAttributesDecoded.System,True));
 Strings.Add('    Temporary:           ' + BoolToStr(fAttributesDecoded.Temporary,True));
-Strings.Add('    Vitual:              ' + BoolToStr(fAttributesDecoded.Virtual,True));
+Strings.Add('    Virtual:             ' + BoolToStr(fAttributesDecoded.Virtual,True));
 If fVersionInfoPresent then
   begin
     Strings.Add(sLineBreak + '--- File version info ---');
