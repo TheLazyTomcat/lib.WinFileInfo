@@ -21,9 +21,9 @@
     compiled for other systems too. But in such case, it provides only a
     limited file information set.
 
-  Version 1.1 (2022-01-18)
+  Version 1.1.1 (2022-09-28)
 
-  Last change 2022-09-26
+  Last change 2022-09-28
 
   ©2015-2022 František Milt
 
@@ -564,9 +564,7 @@ type
     procedure Initialize(const FileName: String); virtual;
     procedure Finalize; virtual;
   public
-  {$IFDEF Windows}
     constructor Create(LoadingStrategy: TWFILoadingStrategy = WFI_LS_All); overload;
-  {$ENDIF}
     constructor Create(const FileName: String; LoadingStrategy: TWFILoadingStrategy = WFI_LS_All); overload;
     destructor Destroy; override;
     procedure Refresh; virtual;
@@ -650,7 +648,11 @@ type
 implementation
 
 uses
-  {$IFDEF Windows}StrRect{$ELSE}DateUtils, BaseUnix{$ENDIF};
+{$IFDEF Windows}
+  {$IFDEF FPC} jwaPSApi{$ELSE} PSApi{$ENDIF}, StrRect
+{$ELSE}
+  DateUtils, BaseUnix, DL
+{$ENDIF};
 
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
@@ -1761,7 +1763,17 @@ else
 {$ELSE}
 fName := FileName;
 fLongName := ExpandFileName(FileName);
-fFileHandle := FpOpen(PChar(fLongName),O_RDONLY or O_NOATIME or O_PATH);
+// first try opening the file as directory, to see what it is...
+fFileHandle := FpOpen(PChar(fLongName),O_RDONLY or O_DIRECTORY);
+If fFileHandle <> -1 then
+  begin
+    // the diven path is a directory :(
+    FpClose(fFileHandle);
+    fFileHandle := -1;
+    errno := ESysEISDIR;
+  end
+// the opening failed, so we assume the file is not a directory
+else fFileHandle := FpOpen(PChar(fLongName),O_RDONLY or O_NOATIME or O_PATH);
 If fFileHandle <> -1 then
   begin
     // file was successfully opened
@@ -1803,17 +1815,25 @@ end;
     TWinFileInfo - public methods
 -------------------------------------------------------------------------------}
 
-{$IFDEF Windows}
 constructor TWinFileInfo.Create(LoadingStrategy: TWFILoadingStrategy = WFI_LS_All);
 var
   ModuleFileName: String;
+{$IFDEF Windows}
 begin
 SetLength(ModuleFileName,MAX_PATH);
-SetLength(ModuleFileName,GetModuleFileName(hInstance,PChar(ModuleFileName),Length(ModuleFileName)));
+SetLength(ModuleFileName,GetModuleFileNameEx(GetCurrentProcess,hInstance,PChar(ModuleFileName),Length(ModuleFileName)));
 ModuleFileName := WinToStr(ModuleFileName);
+{$ELSE}
+  Info:           dl_info;
+begin
+ModuleFileName := '';
+FillChar(Addr(Info)^,SizeOf(dl_info),0);
+If dladdr(@SameFile{a function in this unit},@Info) <> 0 then
+  If Assigned(Info.dli_fname) then
+    ModuleFileName := ExpandFileName(String(Info.dli_fname));
+{$ENDIF}
 Create(ModuleFileName,LoadingStrategy);
 end;
-{$ENDIF}
 
 //--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
 
